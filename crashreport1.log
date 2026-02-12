@@ -1,0 +1,897 @@
+-------------------------------------
+Translated Report (Full Report Below)
+-------------------------------------
+Process:             auxlab2 [44986]
+Path:                /Users/USER/*/auxlab2
+Identifier:          auxlab2
+Version:             ???
+Code Type:           ARM-64 (Native)
+Role:                Foreground
+Parent Process:      zsh [44981]
+Coalition:           com.apple.Terminal [1945]
+Responsible Process: Terminal [11099]
+User ID:             501
+
+Date/Time:           2026-02-12 00:20:01.9778 -0500
+Launch Time:         2026-02-09 18:57:54.3787 -0500
+Hardware Model:      Mac16,8
+OS Version:          macOS 26.2 (25C56)
+Release Type:        User
+
+Crash Reporter Key:  AF64D4F7-093C-4FB0-A592-FFBC427CD02C
+Incident Identifier: 1307B4F4-11F2-4972-AD58-ED81765825E8
+
+Sleep/Wake UUID:       3F3CBECE-DFF2-46B6-853C-AB5BACD444E9
+
+Time Awake Since Boot: 140000 seconds
+Time Since Wake:       16311 seconds
+
+System Integrity Protection: enabled
+
+Triggered by Thread: 0, Dispatch Queue: com.apple.main-thread
+
+Exception Type:    EXC_BREAKPOINT (SIGTRAP)
+Exception Codes:   0x0000000000000001, 0x0000000199128c2c
+
+Termination Reason:  Namespace SIGNAL, Code 5, Trace/BPT trap: 5
+Terminating Process: exc handler [44986]
+
+
+Application Specific Information:
+detected source and destination buffer overlap
+
+
+Thread 0 Crashed::  Dispatch queue: com.apple.main-thread
+0   libsystem_c.dylib             	       0x199128c2c __chk_fail_overlap + 24
+1   libsystem_c.dylib             	       0x1990b6850 __chk_overlap + 48
+2   libsystem_c.dylib             	       0x1990beeb0 __strcpy_chk + 84
+3   libauxe.dylib                 	       0x10079c950 yyerror + 348
+4   libauxe.dylib                 	       0x10079b4d0 yyparse + 12608
+5   libauxe.dylib                 	       0x100763630 AuxScope::makenodes(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&) + 196
+6   libauxe.dylib                 	       0x1007a49b8 aux_eval(auxContext*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&, auxConfig const&, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>&) + 124
+7   auxlab2                       	       0x100171ccc AuxEngineFacade::eval(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&) + 188
+8   auxlab2                       	       0x100179604 MainWindow::runCommand(QString const&) + 72
+9   auxlab2                       	       0x10017928c MainWindow::eventFilter(QObject*, QEvent*) + 340
+10  QtCore                        	       0x10241eb0c QCoreApplicationPrivate::sendThroughObjectEventFilters(QObject*, QEvent*) + 256
+11  QtWidgets                     	       0x100c38738 QApplicationPrivate::notify_helper(QObject*, QEvent*) + 304
+12  QtWidgets                     	       0x100c39c10 QApplication::notify(QObject*, QEvent*) + 1548
+13  QtCore                        	       0x10241e7fc QCoreApplication::forwardEvent(QObject*, QEvent*, QEvent*) + 180
+14  QtWidgets                     	       0x100c9b828 QWidgetWindow::event(QEvent*) + 164
+15  QtWidgets                     	       0x100c38758 QApplicationPrivate::notify_helper(QObject*, QEvent*) + 336
+16  QtWidgets                     	       0x100c397d8 QApplication::notify(QObject*, QEvent*) + 468
+17  QtCore                        	       0x10241f470 QCoreApplication::sendSpontaneousEvent(QObject*, QEvent*) + 172
+18  QtGui                         	       0x101bd10ac QGuiApplicationPrivate::processKeyEvent(QWindowSystemInterfacePrivate::KeyEvent*) + 360
+19  QtGui                         	       0x101c32de8 QWindowSystemInterface::sendWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>) + 408
+20  QtGui                         	       0x101c3294c QWindowSystemInterface::flushWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>) + 292
+21  libqcocoa.dylib               	       0x1041c59b8 -[QNSView(ComplexText) insertNewline:] + 440
+22  AppKit                        	       0x19e116d1c -[NSResponder tryToPerform:with:] + 60
+23  libqcocoa.dylib               	       0x1041c7554 -[QNSView(ComplexText) doCommandBySelector:] + 272
+24  AppKit                        	       0x19dc8b290 +[NSInputAnalytics(TrackedActionsManager) allowActionTrackingAnalyticsWithName:forAction:] + 164
+25  AppKit                        	       0x19e57770c -[NSTextInputContext(NSInputContext_WithCompletion) doCommandBySelector:completionHandler:] + 276
+26  AppKit                        	       0x19de9826c -[NSKeyBindingManager(NSKeyBindingManager_MultiClients) interpretEventAsCommand:forClient:] + 1496
+27  AppKit                        	       0x19e574f0c __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_5 + 420
+28  AppKit                        	       0x19e574d4c __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.719 + 100
+29  AppKit                        	       0x19e574044 -[NSTextInputContext tryHandleEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:] + 148
+30  AppKit                        	       0x19e574ca4 __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke.716 + 304
+31  HIToolbox                     	       0x1a5e315e4 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_6 + 96
+32  HIToolbox                     	       0x1a5da7c60 invocation function for block in DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*) + 148
+33  AppKit                        	       0x19e56daf0 __55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke.188 + 576
+34  AppKit                        	       0x19e56d894 __55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke_2 + 100
+35  AppKit                        	       0x19e56afd0 -[NSTextInputContext tryHandleTSMEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:] + 148
+36  AppKit                        	       0x19e56d1e8 -[NSTextInputContext handleTSMEvent:completionHandler:] + 3184
+37  AppKit                        	       0x19d79f660 _NSTSMEventHandler + 324
+38  HIToolbox                     	       0x1a5da7620 DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*) + 1268
+39  HIToolbox                     	       0x1a5db834c SendEventToEventTargetInternal(OpaqueEventRef*, OpaqueEventTargetRef*, HandlerCallRec*) + 316
+40  HIToolbox                     	       0x1a5f3aac4 SendEventToEventTargetWithOptions + 44
+41  HIToolbox                     	       0x1a5e2a57c SendTSMEvent_WithCompletionHandler + 432
+42  HIToolbox                     	       0x1a5e2aa08 __SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler_block_invoke + 300
+43  HIToolbox                     	       0x1a5e2af28 __SendFilterTextEvent_WithCompletionHandler_block_invoke + 236
+44  HIToolbox                     	       0x1a5e2a5d4 SendTSMEvent_WithCompletionHandler + 520
+45  HIToolbox                     	       0x1a5e2a894 SendFilterTextEvent_WithCompletionHandler + 260
+46  HIToolbox                     	       0x1a5e279f8 SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler + 312
+47  HIToolbox                     	       0x1a5e2b7f4 __utDeliverTSMEvent_WithCompletionHandler_block_invoke_2 + 220
+48  HIToolbox                     	       0x1a5e2b608 __utDeliverTSMEvent_WithCompletionHandler_block_invoke + 284
+49  HIToolbox                     	       0x1a5e27200 TSMKeyEvent_WithCompletionHandler + 616
+50  HIToolbox                     	       0x1a5e31564 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_5 + 312
+51  HIToolbox                     	       0x1a5e31414 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_4 + 408
+52  HIToolbox                     	       0x1a5e311cc __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_3 + 352
+53  HIToolbox                     	       0x1a5e30f48 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_2 + 352
+54  HIToolbox                     	       0x1a5e30cc4 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke + 344
+55  HIToolbox                     	       0x1a5e30800 TSMProcessRawKeyEventWithOptionsAndCompletionHandler + 2712
+56  AppKit                        	       0x19e574b10 __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.712 + 148
+57  AppKit                        	       0x19e573e8c __204-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]_block_invoke.695 + 180
+58  AppKit                        	       0x19e573cdc -[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:] + 336
+59  AppKit                        	       0x19e574664 -[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:] + 1460
+60  AppKit                        	       0x19e573b3c -[NSTextInputContext _handleEvent:allowingSyntheticEvent:] + 132
+61  libqcocoa.dylib               	       0x1041c375c -[QNSView(Keys) handleKeyEvent:] + 1584
+62  libqcocoa.dylib               	       0x1041c4340 -[QNSView(Keys) keyDown:] + 92
+63  AppKit                        	       0x19e46856c -[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:] + 300
+64  AppKit                        	       0x19e4680bc -[NSWindow(NSEventRouting) sendEvent:] + 372
+65  libqcocoa.dylib               	       0x1041d0094 -[QNSWindow sendEvent:] + 840
+66  AppKit                        	       0x19e1a0630 -[NSApplication(NSEventRouting) sendEvent:] + 716
+67  libqcocoa.dylib               	       0x104167bd0 -[QNSApplication sendEvent:] + 84
+68  AppKit                        	       0x19dc386f4 -[NSApplication _handleEvent:] + 60
+69  AppKit                        	       0x19d6cf7a8 -[NSApplication run] + 408
+70  libqcocoa.dylib               	       0x1041754ec QCocoaEventDispatcher::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) + 2152
+71  QtCore                        	       0x10242828c QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) + 588
+72  QtCore                        	       0x10241f05c QCoreApplication::exec() + 228
+73  auxlab2                       	       0x10017194c main + 88
+74  dyld                          	       0x198e5dd54 start + 7184
+
+Thread 1:: com.apple.NSEventThread
+0   libsystem_kernel.dylib        	       0x1991e2c34 mach_msg2_trap + 8
+1   libsystem_kernel.dylib        	       0x1991f5028 mach_msg2_internal + 76
+2   libsystem_kernel.dylib        	       0x1991eb98c mach_msg_overwrite + 484
+3   libsystem_kernel.dylib        	       0x1991e2fb4 mach_msg + 24
+4   CoreFoundation                	       0x1992c4ba0 __CFRunLoopServiceMachPort + 160
+5   CoreFoundation                	       0x1992c34f8 __CFRunLoopRun + 1188
+6   CoreFoundation                	       0x19937de34 _CFRunLoopRunSpecificWithOptions + 532
+7   AppKit                        	       0x19d766a34 _NSEventThread + 184
+8   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 2:: caulk.messenger.shared:17
+0   libsystem_kernel.dylib        	       0x1991e2bb0 semaphore_wait_trap + 8
+1   caulk                         	       0x1a583be08 caulk::semaphore::timed_wait(double) + 224
+2   caulk                         	       0x1a583bcb0 caulk::concurrent::details::worker_thread::run() + 32
+3   caulk                         	       0x1a583b950 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 96
+4   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+5   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 3:: caulk.messenger.shared:high
+0   libsystem_kernel.dylib        	       0x1991e2bb0 semaphore_wait_trap + 8
+1   caulk                         	       0x1a583be08 caulk::semaphore::timed_wait(double) + 224
+2   caulk                         	       0x1a583bcb0 caulk::concurrent::details::worker_thread::run() + 32
+3   caulk                         	       0x1a583b950 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 96
+4   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+5   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 4:: com.apple.CFSocket.private
+0   libsystem_kernel.dylib        	       0x1991ede54 __select + 8
+1   CoreFoundation                	       0x1992dc264 __CFSocketManager + 708
+2   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+3   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 5:: caulk::deferred_logger
+0   libsystem_kernel.dylib        	       0x1991e2bb0 semaphore_wait_trap + 8
+1   caulk                         	       0x1a583be08 caulk::semaphore::timed_wait(double) + 224
+2   caulk                         	       0x1a583bcb0 caulk::concurrent::details::worker_thread::run() + 32
+3   caulk                         	       0x1a583b950 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 96
+4   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+5   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 6:: com.apple.audio.IOThread.client
+0   libsystem_kernel.dylib        	       0x1991e2bbc semaphore_wait_signal_trap + 8
+1   caulk                         	       0x1a5858fac caulk::mach::semaphore::wait_signal_or_error(caulk::mach::semaphore&) + 36
+2   CoreAudio                     	       0x19c53b6f0 HALC_ProxyIOContext::IOWorkLoop() + 5052
+3   CoreAudio                     	       0x19c539c8c invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int) + 172
+4   CoreAudio                     	       0x19c707710 HALC_IOThread::Entry(void*) + 88
+5   libsystem_pthread.dylib       	       0x199225c08 _pthread_start + 136
+6   libsystem_pthread.dylib       	       0x199220ba8 thread_start + 8
+
+Thread 7:
+
+Thread 8:
+
+
+Thread 0 crashed with ARM Thread State (64-bit):
+    x0: 0x0000000199131c0c   x1: 0x0000000000000000   x2: 0x000000016fc8de20   x3: 0x000000000000001c
+    x4: 0x0000000000000020   x5: 0x0000000000000020   x6: 0x0000000000000000   x7: 0x0000000000000e90
+    x8: 0x0000000203743000   x9: 0xc2d9f0eb854e0011  x10: 0x000000000000037e  x11: 0x000000016fc8d8c8
+   x12: 0x0000000000000049  x13: 0x000000016fc8e3ee  x14: 0x0000000103aa0da8  x15: 0x0000000afec74000
+   x16: 0x000000019922f360  x17: 0x000000020774a820  x18: 0x0000000000000000  x19: 0x000000016fc8de11
+   x20: 0x000000016fc8de20  x21: 0xffffffffffffffff  x22: 0x0000000000000000  x23: 0x0000000000000000
+   x24: 0x000000016fc8fd9c  x25: 0x0000000000000002  x26: 0x00000001027a4903  x27: 0x0000000000000000
+   x28: 0x0000000103c48070   fp: 0x000000016fc8dd00   lr: 0x0000000199128c2c
+    sp: 0x000000016fc8dd00   pc: 0x0000000199128c2c cpsr: 0x20000000
+   far: 0x0000000000000000  esr: 0xf2000001 (Breakpoint) brk 1
+
+Binary Images:
+       0x10016c000 -        0x100193fff auxlab2 (*) <e22ce793-6a45-35f7-93b6-43594208dca8> /Users/USER/*/auxlab2
+       0x100c2c000 -        0x101097fff org.qt-project.QtWidgets (6.10) <7cedf37a-2e1b-3b96-a2b7-37343b5fbc05> /opt/homebrew/*/QtWidgets.framework/Versions/A/QtWidgets
+       0x100554000 -        0x10063bfff org.qt-project.QtMultimedia (6.10) <3416bc31-6fce-3708-b3c1-c889ed4febc7> /opt/homebrew/*/QtMultimedia.framework/Versions/A/QtMultimedia
+       0x100710000 -        0x100853fff libauxe.dylib (*) <0f75654f-ccc2-30d2-95fa-fde94a7c0e2c> /Users/USER/*/libauxe.dylib
+       0x101b40000 -        0x1020e3fff org.qt-project.QtGui (6.10) <b63f0f6c-1111-3e4d-b49c-70e7031ed5e4> /opt/homebrew/*/QtGui.framework/Versions/A/QtGui
+       0x1009f4000 -        0x100b2bfff org.qt-project.QtNetwork (6.10) <7ee28ec9-4e45-344b-8caf-458323f9cae7> /opt/homebrew/*/QtNetwork.framework/Versions/A/QtNetwork
+       0x102384000 -        0x1027fbfff org.qt-project.QtCore (6.10) <f44d1f58-12d7-3be8-892d-e764bdc4f387> /opt/homebrew/*/QtCore.framework/Versions/A/QtCore
+       0x10031c000 -        0x100417fff libglib-2.0.0.dylib (*) <95f652fe-0fda-36d0-b6d0-34427409a2fe> /opt/homebrew/*/libglib-2.0.0.dylib
+       0x101308000 -        0x10138bfff org.qt-project.QtDBus (6.10) <3b27803e-39cd-30ee-9f01-ee534a803275> /opt/homebrew/*/QtDBus.framework/Versions/A/QtDBus
+       0x100204000 -        0x100227fff libpng16.16.dylib (*) <23909518-7b79-3629-96ff-c76ddc18e33b> /opt/homebrew/*/libpng16.16.dylib
+       0x101530000 -        0x1015ebfff libharfbuzz.0.dylib (*) <67cf7c00-9bfe-3fc6-b4d1-769ffc46bc68> /opt/homebrew/*/libharfbuzz.0.dylib
+       0x1001e8000 -        0x1001f3fff libmd4c.0.5.2.dylib (*) <1a08cf60-8d8b-3f61-bcbd-ab86aee61bc3> /opt/homebrew/*/libmd4c.0.5.2.dylib
+       0x101404000 -        0x10147ffff libfreetype.6.dylib (*) <8d0befd4-703c-33a1-9690-56d4b099b308> /opt/homebrew/*/libfreetype.6.dylib
+       0x100238000 -        0x10023bfff libgthread-2.0.0.dylib (*) <4f5b5df1-d221-3118-accd-3e55f50db2da> /opt/homebrew/*/libgthread-2.0.0.dylib
+       0x100280000 -        0x1002a7fff libintl.8.dylib (*) <9ef58f71-571d-352e-bb98-6e9754d6b30b> /opt/homebrew/*/libintl.8.dylib
+       0x10165c000 -        0x1016d3fff libpcre2-8.0.dylib (*) <ac59ae27-0884-3df1-baf1-38015aa7768b> /opt/homebrew/*/libpcre2-8.0.dylib
+       0x100468000 -        0x100497fff libdbus-1.3.dylib (*) <d67bd0e2-713d-3b96-8916-513463708577> /opt/homebrew/*/libdbus-1.3.dylib
+       0x102a18000 -        0x102bcbfff libicui18n.78.2.dylib (*) <77f6958d-ee70-3616-83b8-cda8cee757c8> /opt/homebrew/*/libicui18n.78.2.dylib
+       0x1018b4000 -        0x1019f3fff libicuuc.78.2.dylib (*) <a8753081-d7ad-32f7-afa2-c5367f4d30ee> /opt/homebrew/*/libicuuc.78.2.dylib
+       0x104ccc000 -        0x106c5ffff libicudata.78.2.dylib (*) <43c65598-8d23-3a63-95c7-17ec6d829426> /opt/homebrew/*/libicudata.78.2.dylib
+       0x100248000 -        0x100253fff libdouble-conversion.3.4.0.dylib (*) <a37dddd2-a19d-363b-b32a-90da247139e4> /opt/homebrew/*/libdouble-conversion.3.4.0.dylib
+       0x100264000 -        0x10026bfff libb2.1.dylib (*) <cdb9743e-4399-33d0-a9af-8667f7f00478> /opt/homebrew/*/libb2.1.dylib
+       0x1016ec000 -        0x10175bfff libpcre2-16.0.dylib (*) <d4323c04-d0c2-3f9f-a6fc-0975d7c7501f> /opt/homebrew/*/libpcre2-16.0.dylib
+       0x101a80000 -        0x101b07fff libzstd.1.5.7.dylib (*) <1ce1197a-4a2b-3036-984e-95599210332b> /opt/homebrew/*/libzstd.1.5.7.dylib
+       0x1002dc000 -        0x1002effff libgraphite2.3.2.1.dylib (*) <481f6d39-27e3-3c77-a203-99ddb4e2de7f> /opt/homebrew/*/libgraphite2.3.2.1.dylib
+       0x1002b8000 -        0x1002bbfff org.qt-project.QtConcurrent (6.10) <a08e21b7-600c-32f3-b43d-5f88e7bc77e2> /opt/homebrew/*/QtConcurrent.framework/Versions/A/QtConcurrent
+       0x100300000 -        0x10030bfff libbrotlidec.1.2.0.dylib (*) <c7d658ec-f84b-33a4-9ad7-b31c103fb593> /opt/homebrew/*/libbrotlidec.1.2.0.dylib
+       0x102d20000 -        0x102db3fff libssl.3.dylib (*) <5699d44c-cc20-3420-861f-ef110af1e1fa> /opt/homebrew/*/libssl.3.dylib
+       0x10329c000 -        0x1035dbfff libcrypto.3.dylib (*) <73c02ad5-a80c-3620-beb7-8a6e51366b7c> /opt/homebrew/*/libcrypto.3.dylib
+       0x1014a0000 -        0x1014bffff libbrotlicommon.1.2.0.dylib (*) <ebf79aec-78a4-3105-884d-0a459c69a38c> /opt/homebrew/*/libbrotlicommon.1.2.0.dylib
+       0x102dfc000 -        0x102e83fff libfftw3.3.dylib (*) <403ce69d-a841-3de9-9730-6a476f246126> /opt/homebrew/*/libfftw3.3.dylib
+       0x103024000 -        0x10318ffff libsamplerate.0.2.2.dylib (*) <0da641e6-fcba-3c1a-8c8c-ff25aadedac6> /opt/homebrew/*/libsamplerate.0.2.2.dylib
+       0x1017e0000 -        0x1017fffff com.apple.security.csparser (3.0) <79fadf74-9078-3c3d-a8de-e0abbb74ead4> /System/Library/Frameworks/Security.framework/Versions/A/PlugIns/csparser.bundle/Contents/MacOS/csparser
+       0x104160000 -        0x10420ffff libqcocoa.dylib (*) <4fac08a7-1853-3971-8782-4d42a1ea8a94> /opt/homebrew/*/libqcocoa.dylib
+       0x10189c000 -        0x1018a7fff libobjc-trampolines.dylib (*) <d4baeab8-b553-3779-a0ff-d8848e7a22df> /usr/lib/libobjc-trampolines.dylib
+       0x1031a0000 -        0x1031c3fff libqmacstyle.dylib (*) <3ee7e50b-33dd-364c-ab40-a41a2f9244fc> /opt/homebrew/*/libqmacstyle.dylib
+       0x11a8ac000 -        0x11b0d7fff com.apple.AGXMetalG16X (342.3) <f3e5018e-3b97-3b77-837f-18455b13e98f> /System/Library/Extensions/AGXMetalG16X.bundle/Contents/MacOS/AGXMetalG16X
+       0x11a7f4000 -        0x11a82bfff libdarwinmediaplugin.dylib (*) <73f3b81d-fb80-30e0-a066-c38ff1e47b94> /opt/homebrew/*/libdarwinmediaplugin.dylib
+       0x122344000 -        0x122487fff com.apple.audio.units.Components (1.14) <0312381d-61ae-3ab9-9cea-b1e46a0c4e54> /System/Library/Components/CoreAudio.component/Contents/MacOS/CoreAudio
+       0x1990b1000 -        0x199133047 libsystem_c.dylib (*) <fb5569a9-cb26-36c2-aa05-e99243692b60> /usr/lib/system/libsystem_c.dylib
+       0x19d6b7000 -        0x19ede627f com.apple.AppKit (6.9) <4e909aec-68bc-3fc9-a87a-de928e1e36e1> /System/Library/Frameworks/AppKit.framework/Versions/C/AppKit
+       0x1a5cf2000 -        0x1a5ff527f com.apple.HIToolbox (2.1.1) <fb92ce0c-1ee5-3f03-992c-df53ed9b3cb4> /System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox
+       0x198e55000 -        0x198ef3fc3 dyld (*) <0975afba-c46b-364c-bd84-a75daa9e455a> /usr/lib/dyld
+               0x0 - 0xffffffffffffffff ??? (*) <00000000-0000-0000-0000-000000000000> ???
+       0x19922c000 -        0x1992343ef libsystem_platform.dylib (*) <4dbaf982-1576-3ffc-86be-03a9d2c96be5> /usr/lib/system/libsystem_platform.dylib
+       0x1991e2000 -        0x19921e49f libsystem_kernel.dylib (*) <548c45c8-9733-3f0d-8ef4-c06df1df2ad0> /usr/lib/system/libsystem_kernel.dylib
+       0x199265000 -        0x1997adc3f com.apple.CoreFoundation (6.9) <649000a2-3eb4-3cf5-970a-d3cb37b5780c> /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+       0x19921f000 -        0x19922babb libsystem_pthread.dylib (*) <527c4ba0-91a5-378b-b3e2-d38269ca5a66> /usr/lib/system/libsystem_pthread.dylib
+       0x1a583a000 -        0x1a5862d7f com.apple.audio.caulk (1.0) <d4644b08-911d-30af-82e7-c404878abf47> /System/Library/PrivateFrameworks/caulk.framework/Versions/A/caulk
+       0x19c335000 -        0x19cae057f com.apple.audio.CoreAudio (5.0) <f37b241b-2a83-3f86-bd94-329a18ba4715> /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
+
+External Modification Summary:
+  Calls made by other processes targeting this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by all processes on this machine:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+
+VM Region Summary:
+ReadOnly portion of Libraries: Total=1.8G resident=0K(0%) swapped_out_or_unallocated=1.8G(100%)
+Writable regions: Total=300.0M written=1073K(0%) resident=753K(0%) swapped_out=320K(0%) unallocated=299.0M(100%)
+
+                                VIRTUAL   REGION 
+REGION TYPE                        SIZE    COUNT (non-coalesced) 
+===========                     =======  ======= 
+Accelerate framework               128K        1 
+Activity Tracing                   256K        1 
+AttributeGraph Data               1024K        1 
+ColorSync                           16K        1 
+CoreAnimation                     1360K       31 
+CoreGraphics                        32K        2 
+CoreUI image data                  752K        6 
+Foundation                         144K        3 
+Kernel Alloc Once                   64K        2 
+MALLOC                           283.8M       65 
+MALLOC guard page                 4032K        4 
+STACK GUARD                       56.1M        9 
+Stack                             12.3M       10 
+VM_ALLOCATE                        352K       13 
+__AUTH                            5721K      625 
+__AUTH_CONST                      86.9M     1002 
+__CTF                               824        1 
+__DATA                            34.6M      984 
+__DATA_CONST                      34.1M     1045 
+__DATA_DIRTY                      8193K      863 
+__FONT_DATA                        2352        1 
+__INFO_FILTER                         8        1 
+__LINKEDIT                       607.7M       40 
+__OBJC_RO                         78.4M        1 
+__OBJC_RW                         2570K        1 
+__TEXT                             1.2G     1068 
+__TPRO_CONST                       128K        2 
+dyld private memory                128K        1 
+mapped file                      308.3M       36 
+page table in kernel               753K        1 
+shared memory                     1616K       23 
+===========                     =======  ======= 
+TOTAL                              2.7G     5844 
+
+
+-----------
+Full Report
+-----------
+
+{"app_name":"auxlab2","timestamp":"2026-02-12 00:20:19.00 -0500","app_version":"","sroute_id":3,"slice_uuid":"e22ce793-6a45-35f7-93b6-43594208dca8","build_version":"","platform":1,"share_with_app_devs":0,"is_first_party":1,"bug_type":"309","os_version":"macOS 26.2 (25C56)","roots_installed":0,"incident_id":"1307B4F4-11F2-4972-AD58-ED81765825E8","name":"auxlab2"}
+{
+  "uptime" : 140000,
+  "procRole" : "Foreground",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "Mac16,8",
+  "coalitionID" : 1945,
+  "osVersion" : {
+    "train" : "macOS 26.2",
+    "build" : "25C56",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-02-12 00:20:01.9778 -0500",
+  "codeSigningMonitor" : 2,
+  "incident" : "1307B4F4-11F2-4972-AD58-ED81765825E8",
+  "pid" : 44986,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-02-09 18:57:54.3787 -0500",
+  "procStartAbsTime" : 2087619524345,
+  "procExitAbsTime" : 3395061952767,
+  "procName" : "auxlab2",
+  "procPath" : "\/Users\/USER\/*\/auxlab2",
+  "parentProc" : "zsh",
+  "parentPid" : 44981,
+  "coalitionName" : "com.apple.Terminal",
+  "crashReporterKey" : "AF64D4F7-093C-4FB0-A592-FFBC427CD02C",
+  "appleIntelligenceStatus" : {"state":"available"},
+  "developerMode" : 1,
+  "responsiblePid" : 11099,
+  "responsibleProc" : "Terminal",
+  "codeSigningID" : "auxlab2",
+  "codeSigningTeamID" : "",
+  "codeSigningFlags" : 570556929,
+  "codeSigningValidationCategory" : 10,
+  "codeSigningTrustLevel" : 4294967295,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"QAAAsADML5H8AQCUIAAg1H8jA9X9e7+p\/QMAkUAAALAAMDCR9QEAlA==","atPC":"IAAg1H8jA9X2V72p9E8Bqf17Aqn9gwCRnwAD60MCAFT0AwOq8wMBqg=="},
+  "bootSessionUUID" : "8E33CFD5-1E4E-4B10-B69B-AAA3E30EEC4B",
+  "wakeTime" : 16311,
+  "sleepWakeUUID" : "3F3CBECE-DFF2-46B6-853C-AB5BACD444E9",
+  "sip" : "enabled",
+  "sroute_id" : 3,
+  "exception" : {"codes":"0x0000000000000001, 0x0000000199128c2c","rawCodes":[1,6863096876],"type":"EXC_BREAKPOINT","signal":"SIGTRAP"},
+  "termination" : {"flags":0,"code":5,"namespace":"SIGNAL","indicator":"Trace\/BPT trap: 5","byProc":"exc handler","byPid":44986},
+  "os_fault" : {"process":"auxlab2"},
+  "asi" : {"libsystem_c.dylib":["detected source and destination buffer overlap"]},
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":1348173,"threadState":{"x":[{"value":6863133708,"symbolLocation":3861,"symbol":"hexlist"},{"value":0},{"value":6170402336},{"value":28},{"value":32},{"value":32},{"value":0},{"value":3728},{"value":8647880704,"symbolLocation":0,"symbol":"lcl_TZname"},{"value":14040518207648694289},{"value":894},{"value":6170400968},{"value":73},{"value":6170403822},{"value":4356443560},{"value":47224143872},{"value":6864171872,"symbolLocation":0,"symbol":"_platform_memmove"},{"value":8715020320},{"value":0},{"value":6170402321},{"value":6170402336},{"value":18446744073709551615},{"value":0},{"value":0},{"value":6170410396},{"value":2},{"value":4336535811},{"value":0},{"value":4358176880}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6863096876},"cpsr":{"value":536870912},"fp":{"value":6170402048},"sp":{"value":6170402048},"esr":{"value":4060086273,"description":"(Breakpoint) brk 1"},"pc":{"value":6863096876,"matchesCrashFrame":1},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":490540,"symbol":"__chk_fail_overlap","symbolLocation":24,"imageIndex":39},{"imageOffset":22608,"symbol":"__chk_overlap","symbolLocation":48,"imageIndex":39},{"imageOffset":57008,"symbol":"__strcpy_chk","symbolLocation":84,"imageIndex":39},{"imageOffset":575824,"symbol":"yyerror","symbolLocation":348,"imageIndex":3},{"imageOffset":570576,"symbol":"yyparse","symbolLocation":12608,"imageIndex":3},{"imageOffset":341552,"symbol":"AuxScope::makenodes(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&)","symbolLocation":196,"imageIndex":3},{"imageOffset":608696,"symbol":"aux_eval(auxContext*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&, auxConfig const&, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>&)","symbolLocation":124,"imageIndex":3},{"imageOffset":23756,"symbol":"AuxEngineFacade::eval(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&)","symbolLocation":188,"imageIndex":0},{"imageOffset":54788,"symbol":"MainWindow::runCommand(QString const&)","symbolLocation":72,"imageIndex":0},{"imageOffset":53900,"symbol":"MainWindow::eventFilter(QObject*, QEvent*)","symbolLocation":340,"imageIndex":0},{"imageOffset":633612,"symbol":"QCoreApplicationPrivate::sendThroughObjectEventFilters(QObject*, QEvent*)","symbolLocation":256,"imageIndex":6},{"imageOffset":51000,"symbol":"QApplicationPrivate::notify_helper(QObject*, QEvent*)","symbolLocation":304,"imageIndex":1},{"imageOffset":56336,"symbol":"QApplication::notify(QObject*, QEvent*)","symbolLocation":1548,"imageIndex":1},{"imageOffset":632828,"symbol":"QCoreApplication::forwardEvent(QObject*, QEvent*, QEvent*)","symbolLocation":180,"imageIndex":6},{"imageOffset":456744,"symbol":"QWidgetWindow::event(QEvent*)","symbolLocation":164,"imageIndex":1},{"imageOffset":51032,"symbol":"QApplicationPrivate::notify_helper(QObject*, QEvent*)","symbolLocation":336,"imageIndex":1},{"imageOffset":55256,"symbol":"QApplication::notify(QObject*, QEvent*)","symbolLocation":468,"imageIndex":1},{"imageOffset":636016,"symbol":"QCoreApplication::sendSpontaneousEvent(QObject*, QEvent*)","symbolLocation":172,"imageIndex":6},{"imageOffset":594092,"symbol":"QGuiApplicationPrivate::processKeyEvent(QWindowSystemInterfacePrivate::KeyEvent*)","symbolLocation":360,"imageIndex":4},{"imageOffset":994792,"symbol":"QWindowSystemInterface::sendWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>)","symbolLocation":408,"imageIndex":4},{"imageOffset":993612,"symbol":"QWindowSystemInterface::flushWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>)","symbolLocation":292,"imageIndex":4},{"imageOffset":416184,"symbol":"-[QNSView(ComplexText) insertNewline:]","symbolLocation":440,"imageIndex":33},{"imageOffset":10878236,"symbol":"-[NSResponder tryToPerform:with:]","symbolLocation":60,"imageIndex":40},{"imageOffset":423252,"symbol":"-[QNSView(ComplexText) doCommandBySelector:]","symbolLocation":272,"imageIndex":33},{"imageOffset":6111888,"symbol":"+[NSInputAnalytics(TrackedActionsManager) allowActionTrackingAnalyticsWithName:forAction:]","symbolLocation":164,"imageIndex":40},{"imageOffset":15468300,"symbol":"-[NSTextInputContext(NSInputContext_WithCompletion) doCommandBySelector:completionHandler:]","symbolLocation":276,"imageIndex":40},{"imageOffset":8262252,"symbol":"-[NSKeyBindingManager(NSKeyBindingManager_MultiClients) interpretEventAsCommand:forClient:]","symbolLocation":1496,"imageIndex":40},{"imageOffset":15458060,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_5","symbolLocation":420,"imageIndex":40},{"imageOffset":15457612,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.719","symbolLocation":100,"imageIndex":40},{"imageOffset":15454276,"symbol":"-[NSTextInputContext tryHandleEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:]","symbolLocation":148,"imageIndex":40},{"imageOffset":15457444,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke.716","symbolLocation":304,"imageIndex":40},{"imageOffset":1308132,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_6","symbolLocation":96,"imageIndex":41},{"imageOffset":744544,"symbol":"invocation function for block in DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*)","symbolLocation":148,"imageIndex":41},{"imageOffset":15428336,"symbol":"__55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke.188","symbolLocation":576,"imageIndex":40},{"imageOffset":15427732,"symbol":"__55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke_2","symbolLocation":100,"imageIndex":40},{"imageOffset":15417296,"symbol":"-[NSTextInputContext tryHandleTSMEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:]","symbolLocation":148,"imageIndex":40},{"imageOffset":15426024,"symbol":"-[NSTextInputContext handleTSMEvent:completionHandler:]","symbolLocation":3184,"imageIndex":40},{"imageOffset":951904,"symbol":"_NSTSMEventHandler","symbolLocation":324,"imageIndex":40},{"imageOffset":742944,"symbol":"DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*)","symbolLocation":1268,"imageIndex":41},{"imageOffset":811852,"symbol":"SendEventToEventTargetInternal(OpaqueEventRef*, OpaqueEventTargetRef*, HandlerCallRec*)","symbolLocation":316,"imageIndex":41},{"imageOffset":2394820,"symbol":"SendEventToEventTargetWithOptions","symbolLocation":44,"imageIndex":41},{"imageOffset":1279356,"symbol":"SendTSMEvent_WithCompletionHandler","symbolLocation":432,"imageIndex":41},{"imageOffset":1280520,"symbol":"__SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler_block_invoke","symbolLocation":300,"imageIndex":41},{"imageOffset":1281832,"symbol":"__SendFilterTextEvent_WithCompletionHandler_block_invoke","symbolLocation":236,"imageIndex":41},{"imageOffset":1279444,"symbol":"SendTSMEvent_WithCompletionHandler","symbolLocation":520,"imageIndex":41},{"imageOffset":1280148,"symbol":"SendFilterTextEvent_WithCompletionHandler","symbolLocation":260,"imageIndex":41},{"imageOffset":1268216,"symbol":"SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler","symbolLocation":312,"imageIndex":41},{"imageOffset":1284084,"symbol":"__utDeliverTSMEvent_WithCompletionHandler_block_invoke_2","symbolLocation":220,"imageIndex":41},{"imageOffset":1283592,"symbol":"__utDeliverTSMEvent_WithCompletionHandler_block_invoke","symbolLocation":284,"imageIndex":41},{"imageOffset":1266176,"symbol":"TSMKeyEvent_WithCompletionHandler","symbolLocation":616,"imageIndex":41},{"imageOffset":1308004,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_5","symbolLocation":312,"imageIndex":41},{"imageOffset":1307668,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_4","symbolLocation":408,"imageIndex":41},{"imageOffset":1307084,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_3","symbolLocation":352,"imageIndex":41},{"imageOffset":1306440,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_2","symbolLocation":352,"imageIndex":41},{"imageOffset":1305796,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke","symbolLocation":344,"imageIndex":41},{"imageOffset":1304576,"symbol":"TSMProcessRawKeyEventWithOptionsAndCompletionHandler","symbolLocation":2712,"imageIndex":41},{"imageOffset":15457040,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.712","symbolLocation":148,"imageIndex":40},{"imageOffset":15453836,"symbol":"__204-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]_block_invoke.695","symbolLocation":180,"imageIndex":40},{"imageOffset":15453404,"symbol":"-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]","symbolLocation":336,"imageIndex":40},{"imageOffset":15455844,"symbol":"-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]","symbolLocation":1460,"imageIndex":40},{"imageOffset":15452988,"symbol":"-[NSTextInputContext _handleEvent:allowingSyntheticEvent:]","symbolLocation":132,"imageIndex":40},{"imageOffset":407388,"symbol":"-[QNSView(Keys) handleKeyEvent:]","symbolLocation":1584,"imageIndex":33},{"imageOffset":410432,"symbol":"-[QNSView(Keys) keyDown:]","symbolLocation":92,"imageIndex":33},{"imageOffset":14357868,"symbol":"-[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:]","symbolLocation":300,"imageIndex":40},{"imageOffset":14356668,"symbol":"-[NSWindow(NSEventRouting) sendEvent:]","symbolLocation":372,"imageIndex":40},{"imageOffset":458900,"symbol":"-[QNSWindow sendEvent:]","symbolLocation":840,"imageIndex":33},{"imageOffset":11441712,"symbol":"-[NSApplication(NSEventRouting) sendEvent:]","symbolLocation":716,"imageIndex":40},{"imageOffset":31696,"symbol":"-[QNSApplication sendEvent:]","symbolLocation":84,"imageIndex":33},{"imageOffset":5773044,"symbol":"-[NSApplication _handleEvent:]","symbolLocation":60,"imageIndex":40},{"imageOffset":100264,"symbol":"-[NSApplication run]","symbolLocation":408,"imageIndex":40},{"imageOffset":87276,"symbol":"QCocoaEventDispatcher::processEvents(QFlags<QEventLoop::ProcessEventsFlag>)","symbolLocation":2152,"imageIndex":33},{"imageOffset":672396,"symbol":"QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>)","symbolLocation":588,"imageIndex":6},{"imageOffset":634972,"symbol":"QCoreApplication::exec()","symbolLocation":228,"imageIndex":6},{"imageOffset":22860,"symbol":"main","symbolLocation":88,"imageIndex":0},{"imageOffset":36180,"symbol":"start","symbolLocation":7184,"imageIndex":42}]},{"id":1348236,"name":"com.apple.NSEventThread","threadState":{"x":[{"value":268451845},{"value":21592279046},{"value":8589934592},{"value":131954280235008},{"value":0},{"value":131954280235008},{"value":2},{"value":4294967295},{"value":0},{"value":17179869184},{"value":0},{"value":2},{"value":0},{"value":0},{"value":30723},{"value":0},{"value":18446744073709551569},{"value":8714735776},{"value":0},{"value":4294967295},{"value":2},{"value":131954280235008},{"value":0},{"value":131954280235008},{"value":6172696712},{"value":8589934592},{"value":21592279046},{"value":18446744073709550527},{"value":4412409862}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6863933480},"cpsr":{"value":0},"fp":{"value":6172696560},"sp":{"value":6172696480},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863858740},"far":{"value":0}},"frames":[{"imageOffset":3124,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":45},{"imageOffset":77864,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":45},{"imageOffset":39308,"symbol":"mach_msg_overwrite","symbolLocation":484,"imageIndex":45},{"imageOffset":4020,"symbol":"mach_msg","symbolLocation":24,"imageIndex":45},{"imageOffset":392096,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":160,"imageIndex":46},{"imageOffset":386296,"symbol":"__CFRunLoopRun","symbolLocation":1188,"imageIndex":46},{"imageOffset":1150516,"symbol":"_CFRunLoopRunSpecificWithOptions","symbolLocation":532,"imageIndex":46},{"imageOffset":719412,"symbol":"_NSEventThread","symbolLocation":184,"imageIndex":40},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":1348965,"name":"caulk.messenger.shared:17","threadState":{"x":[{"value":14},{"value":1},{"value":0},{"value":1},{"value":0},{"value":1},{"value":0},{"value":0},{"value":0},{"value":4294967295},{"value":0},{"value":0},{"value":4738842648},{"value":6173847112},{"value":28},{"value":0},{"value":18446744073709551580},{"value":8714738256},{"value":0},{"value":47191078272},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7071841800},"cpsr":{"value":2147483648},"fp":{"value":6173847424},"sp":{"value":6173847392},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863858608},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":45},{"imageOffset":7688,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":224,"imageIndex":48},{"imageOffset":7344,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":32,"imageIndex":48},{"imageOffset":6480,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":96,"imageIndex":48},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":1348966,"name":"caulk.messenger.shared:high","threadState":{"x":[{"value":14},{"value":8203},{"value":8203},{"value":15},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":4294967295},{"value":1},{"value":47196889016},{"value":0},{"value":0},{"value":0},{"value":0},{"value":18446744073709551580},{"value":8714738256},{"value":0},{"value":47191078944},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7071841800},"cpsr":{"value":2147483648},"fp":{"value":6174420864},"sp":{"value":6174420832},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863858608},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":45},{"imageOffset":7688,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":224,"imageIndex":48},{"imageOffset":7344,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":32,"imageIndex":48},{"imageOffset":6480,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":96,"imageIndex":48},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":1348994,"name":"com.apple.CFSocket.private","threadState":{"x":[{"value":4},{"value":0},{"value":20335853616},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":6174994656},{"value":0},{"value":46893156176},{"value":31},{"value":1},{"value":47223933440},{"value":72057602729993601,"symbolLocation":72057594037927937,"symbol":"OBJC_CLASS_$___NSCFArray"},{"value":8692065664,"symbolLocation":0,"symbol":"OBJC_CLASS_$___NSCFArray"},{"value":93},{"value":8714738160},{"value":0},{"value":47209587184},{"value":8647983104,"symbolLocation":896,"symbol":"__last_exception_os_log_pack__"},{"value":8647984616,"symbolLocation":0,"symbol":"__CFActiveSocketsLock"},{"value":20335853616},{"value":47210051840},{"value":32},{"value":0},{"value":20335853632},{"value":47196713104},{"value":47196715072}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6864880228},"cpsr":{"value":1610612736},"fp":{"value":6174994368},"sp":{"value":6174960592},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863904340},"far":{"value":0}},"frames":[{"imageOffset":48724,"symbol":"__select","symbolLocation":8,"imageIndex":45},{"imageOffset":488036,"symbol":"__CFSocketManager","symbolLocation":708,"imageIndex":46},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":1349016,"name":"caulk::deferred_logger","threadState":{"x":[{"value":14},{"value":47195387703},{"value":0},{"value":6176141415},{"value":47195387680},{"value":22},{"value":0},{"value":0},{"value":0},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":18446744073709551580},{"value":8714738256},{"value":0},{"value":47209565080},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7071841800},"cpsr":{"value":2147483648},"fp":{"value":6176141184},"sp":{"value":6176141152},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863858608},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":45},{"imageOffset":7688,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":224,"imageIndex":48},{"imageOffset":7344,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":32,"imageIndex":48},{"imageOffset":6480,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":96,"imageIndex":48},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":1823926,"name":"com.apple.audio.IOThread.client","threadState":{"x":[{"value":14},{"value":88179},{"value":0},{"value":0},{"value":0},{"value":32},{"value":2},{"value":65536},{"value":1},{"value":14040518207648694289},{"value":555253372156160},{"value":555253372156162},{"value":48},{"value":47197473916},{"value":20334630016},{"value":0},{"value":18446744073709551579},{"value":8714738264},{"value":0},{"value":47192187192},{"value":47192187184},{"value":47192187216},{"value":1},{"value":47182321472},{"value":1404923},{"value":0},{"value":6922935256},{"value":47192187184},{"value":47192186368}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7071961004},"cpsr":{"value":1610612736},"fp":{"value":6171553024},"sp":{"value":6171553008},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6863858620},"far":{"value":0}},"frames":[{"imageOffset":3004,"symbol":"semaphore_wait_signal_trap","symbolLocation":8,"imageIndex":45},{"imageOffset":126892,"symbol":"caulk::mach::semaphore::wait_signal_or_error(caulk::mach::semaphore&)","symbolLocation":36,"imageIndex":48},{"imageOffset":2123504,"symbol":"HALC_ProxyIOContext::IOWorkLoop()","symbolLocation":5052,"imageIndex":49},{"imageOffset":2116748,"symbol":"invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int)","symbolLocation":172,"imageIndex":49},{"imageOffset":4007696,"symbol":"HALC_IOThread::Entry(void*)","symbolLocation":88,"imageIndex":49},{"imageOffset":27656,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":47},{"imageOffset":7080,"symbol":"thread_start","symbolLocation":8,"imageIndex":47}]},{"id":2011419,"frames":[],"threadState":{"x":[{"value":6173274112},{"value":39207},{"value":6172737536},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6173274112},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6864112532},"far":{"value":0}}},{"id":2011988,"frames":[],"threadState":{"x":[{"value":6172127232},{"value":0},{"value":6171590656},{"value":0},{"value":278530},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6172127232},"esr":{"value":0},"pc":{"value":6864112532},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4296458240,
+    "size" : 163840,
+    "uuid" : "e22ce793-6a45-35f7-93b6-43594208dca8",
+    "path" : "\/Users\/USER\/*\/auxlab2",
+    "name" : "auxlab2"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4307730432,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtWidgets",
+    "size" : 4636672,
+    "uuid" : "7cedf37a-2e1b-3b96-a2b7-37343b5fbc05",
+    "path" : "\/opt\/homebrew\/*\/QtWidgets.framework\/Versions\/A\/QtWidgets",
+    "name" : "QtWidgets",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4300554240,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtMultimedia",
+    "size" : 950272,
+    "uuid" : "3416bc31-6fce-3708-b3c1-c889ed4febc7",
+    "path" : "\/opt\/homebrew\/*\/QtMultimedia.framework\/Versions\/A\/QtMultimedia",
+    "name" : "QtMultimedia",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4302372864,
+    "size" : 1327104,
+    "uuid" : "0f75654f-ccc2-30d2-95fa-fde94a7c0e2c",
+    "path" : "\/Users\/USER\/*\/libauxe.dylib",
+    "name" : "libauxe.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4323540992,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtGui",
+    "size" : 5914624,
+    "uuid" : "b63f0f6c-1111-3e4d-b49c-70e7031ed5e4",
+    "path" : "\/opt\/homebrew\/*\/QtGui.framework\/Versions\/A\/QtGui",
+    "name" : "QtGui",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4305403904,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtNetwork",
+    "size" : 1277952,
+    "uuid" : "7ee28ec9-4e45-344b-8caf-458323f9cae7",
+    "path" : "\/opt\/homebrew\/*\/QtNetwork.framework\/Versions\/A\/QtNetwork",
+    "name" : "QtNetwork",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4332208128,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtCore",
+    "size" : 4685824,
+    "uuid" : "f44d1f58-12d7-3be8-892d-e764bdc4f387",
+    "path" : "\/opt\/homebrew\/*\/QtCore.framework\/Versions\/A\/QtCore",
+    "name" : "QtCore",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4298227712,
+    "size" : 1032192,
+    "uuid" : "95f652fe-0fda-36d0-b6d0-34427409a2fe",
+    "path" : "\/opt\/homebrew\/*\/libglib-2.0.0.dylib",
+    "name" : "libglib-2.0.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4314923008,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtDBus",
+    "size" : 540672,
+    "uuid" : "3b27803e-39cd-30ee-9f01-ee534a803275",
+    "path" : "\/opt\/homebrew\/*\/QtDBus.framework\/Versions\/A\/QtDBus",
+    "name" : "QtDBus",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297080832,
+    "size" : 147456,
+    "uuid" : "23909518-7b79-3629-96ff-c76ddc18e33b",
+    "path" : "\/opt\/homebrew\/*\/libpng16.16.dylib",
+    "name" : "libpng16.16.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4317184000,
+    "size" : 770048,
+    "uuid" : "67cf7c00-9bfe-3fc6-b4d1-769ffc46bc68",
+    "path" : "\/opt\/homebrew\/*\/libharfbuzz.0.dylib",
+    "name" : "libharfbuzz.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4296966144,
+    "size" : 49152,
+    "uuid" : "1a08cf60-8d8b-3f61-bcbd-ab86aee61bc3",
+    "path" : "\/opt\/homebrew\/*\/libmd4c.0.5.2.dylib",
+    "name" : "libmd4c.0.5.2.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4315955200,
+    "size" : 507904,
+    "uuid" : "8d0befd4-703c-33a1-9690-56d4b099b308",
+    "path" : "\/opt\/homebrew\/*\/libfreetype.6.dylib",
+    "name" : "libfreetype.6.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297293824,
+    "size" : 16384,
+    "uuid" : "4f5b5df1-d221-3118-accd-3e55f50db2da",
+    "path" : "\/opt\/homebrew\/*\/libgthread-2.0.0.dylib",
+    "name" : "libgthread-2.0.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297588736,
+    "size" : 163840,
+    "uuid" : "9ef58f71-571d-352e-bb98-6e9754d6b30b",
+    "path" : "\/opt\/homebrew\/*\/libintl.8.dylib",
+    "name" : "libintl.8.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4318412800,
+    "size" : 491520,
+    "uuid" : "ac59ae27-0884-3df1-baf1-38015aa7768b",
+    "path" : "\/opt\/homebrew\/*\/libpcre2-8.0.dylib",
+    "name" : "libpcre2-8.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4299587584,
+    "size" : 196608,
+    "uuid" : "d67bd0e2-713d-3b96-8916-513463708577",
+    "path" : "\/opt\/homebrew\/*\/libdbus-1.3.dylib",
+    "name" : "libdbus-1.3.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4339105792,
+    "size" : 1785856,
+    "uuid" : "77f6958d-ee70-3616-83b8-cda8cee757c8",
+    "path" : "\/opt\/homebrew\/*\/libicui18n.78.2.dylib",
+    "name" : "libicui18n.78.2.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4320870400,
+    "size" : 1310720,
+    "uuid" : "a8753081-d7ad-32f7-afa2-c5367f4d30ee",
+    "path" : "\/opt\/homebrew\/*\/libicuuc.78.2.dylib",
+    "name" : "libicuuc.78.2.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4375494656,
+    "size" : 33112064,
+    "uuid" : "43c65598-8d23-3a63-95c7-17ec6d829426",
+    "path" : "\/opt\/homebrew\/*\/libicudata.78.2.dylib",
+    "name" : "libicudata.78.2.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297359360,
+    "size" : 49152,
+    "uuid" : "a37dddd2-a19d-363b-b32a-90da247139e4",
+    "path" : "\/opt\/homebrew\/*\/libdouble-conversion.3.4.0.dylib",
+    "name" : "libdouble-conversion.3.4.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297474048,
+    "size" : 32768,
+    "uuid" : "cdb9743e-4399-33d0-a9af-8667f7f00478",
+    "path" : "\/opt\/homebrew\/*\/libb2.1.dylib",
+    "name" : "libb2.1.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4319002624,
+    "size" : 458752,
+    "uuid" : "d4323c04-d0c2-3f9f-a6fc-0975d7c7501f",
+    "path" : "\/opt\/homebrew\/*\/libpcre2-16.0.dylib",
+    "name" : "libpcre2-16.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4322754560,
+    "size" : 557056,
+    "uuid" : "1ce1197a-4a2b-3036-984e-95599210332b",
+    "path" : "\/opt\/homebrew\/*\/libzstd.1.5.7.dylib",
+    "name" : "libzstd.1.5.7.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297965568,
+    "size" : 81920,
+    "uuid" : "481f6d39-27e3-3c77-a203-99ddb4e2de7f",
+    "path" : "\/opt\/homebrew\/*\/libgraphite2.3.2.1.dylib",
+    "name" : "libgraphite2.3.2.1.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4297818112,
+    "CFBundleShortVersionString" : "6.10",
+    "CFBundleIdentifier" : "org.qt-project.QtConcurrent",
+    "size" : 16384,
+    "uuid" : "a08e21b7-600c-32f3-b43d-5f88e7bc77e2",
+    "path" : "\/opt\/homebrew\/*\/QtConcurrent.framework\/Versions\/A\/QtConcurrent",
+    "name" : "QtConcurrent",
+    "CFBundleVersion" : "6.10.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4298113024,
+    "size" : 49152,
+    "uuid" : "c7d658ec-f84b-33a4-9ad7-b31c103fb593",
+    "path" : "\/opt\/homebrew\/*\/libbrotlidec.1.2.0.dylib",
+    "name" : "libbrotlidec.1.2.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4342284288,
+    "size" : 606208,
+    "uuid" : "5699d44c-cc20-3420-861f-ef110af1e1fa",
+    "path" : "\/opt\/homebrew\/*\/libssl.3.dylib",
+    "name" : "libssl.3.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4348035072,
+    "size" : 3407872,
+    "uuid" : "73c02ad5-a80c-3620-beb7-8a6e51366b7c",
+    "path" : "\/opt\/homebrew\/*\/libcrypto.3.dylib",
+    "name" : "libcrypto.3.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4316594176,
+    "size" : 131072,
+    "uuid" : "ebf79aec-78a4-3105-884d-0a459c69a38c",
+    "path" : "\/opt\/homebrew\/*\/libbrotlicommon.1.2.0.dylib",
+    "name" : "libbrotlicommon.1.2.0.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4343185408,
+    "size" : 557056,
+    "uuid" : "403ce69d-a841-3de9-9730-6a476f246126",
+    "path" : "\/opt\/homebrew\/*\/libfftw3.3.dylib",
+    "name" : "libfftw3.3.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4345446400,
+    "size" : 1490944,
+    "uuid" : "0da641e6-fcba-3c1a-8c8c-ff25aadedac6",
+    "path" : "\/opt\/homebrew\/*\/libsamplerate.0.2.2.dylib",
+    "name" : "libsamplerate.0.2.2.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4320002048,
+    "CFBundleShortVersionString" : "3.0",
+    "CFBundleIdentifier" : "com.apple.security.csparser",
+    "size" : 131072,
+    "uuid" : "79fadf74-9078-3c3d-a8de-e0abbb74ead4",
+    "path" : "\/System\/Library\/Frameworks\/Security.framework\/Versions\/A\/PlugIns\/csparser.bundle\/Contents\/MacOS\/csparser",
+    "name" : "csparser",
+    "CFBundleVersion" : "61901.60.40"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4363517952,
+    "size" : 720896,
+    "uuid" : "4fac08a7-1853-3971-8782-4d42a1ea8a94",
+    "path" : "\/opt\/homebrew\/*\/libqcocoa.dylib",
+    "name" : "libqcocoa.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4320772096,
+    "size" : 49152,
+    "uuid" : "d4baeab8-b553-3779-a0ff-d8848e7a22df",
+    "path" : "\/usr\/lib\/libobjc-trampolines.dylib",
+    "name" : "libobjc-trampolines.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4347002880,
+    "size" : 147456,
+    "uuid" : "3ee7e50b-33dd-364c-ab40-a41a2f9244fc",
+    "path" : "\/opt\/homebrew\/*\/libqmacstyle.dylib",
+    "name" : "libqmacstyle.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4740268032,
+    "CFBundleShortVersionString" : "342.3",
+    "CFBundleIdentifier" : "com.apple.AGXMetalG16X",
+    "size" : 8568832,
+    "uuid" : "f3e5018e-3b97-3b77-837f-18455b13e98f",
+    "path" : "\/System\/Library\/Extensions\/AGXMetalG16X.bundle\/Contents\/MacOS\/AGXMetalG16X",
+    "name" : "AGXMetalG16X",
+    "CFBundleVersion" : "342.3"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4739514368,
+    "size" : 229376,
+    "uuid" : "73f3b81d-fb80-30e0-a066-c38ff1e47b94",
+    "path" : "\/opt\/homebrew\/*\/libdarwinmediaplugin.dylib",
+    "name" : "libdarwinmediaplugin.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4868816896,
+    "CFBundleShortVersionString" : "1.14",
+    "CFBundleIdentifier" : "com.apple.audio.units.Components",
+    "size" : 1327104,
+    "uuid" : "0312381d-61ae-3ab9-9cea-b1e46a0c4e54",
+    "path" : "\/System\/Library\/Components\/CoreAudio.component\/Contents\/MacOS\/CoreAudio",
+    "name" : "CoreAudio",
+    "CFBundleVersion" : "1.14"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6862606336,
+    "size" : 532552,
+    "uuid" : "fb5569a9-cb26-36c2-aa05-e99243692b60",
+    "path" : "\/usr\/lib\/system\/libsystem_c.dylib",
+    "name" : "libsystem_c.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6936031232,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.AppKit",
+    "size" : 24310400,
+    "uuid" : "4e909aec-68bc-3fc9-a87a-de928e1e36e1",
+    "path" : "\/System\/Library\/Frameworks\/AppKit.framework\/Versions\/C\/AppKit",
+    "name" : "AppKit",
+    "CFBundleVersion" : "2685.30.107"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7076782080,
+    "CFBundleShortVersionString" : "2.1.1",
+    "CFBundleIdentifier" : "com.apple.HIToolbox",
+    "size" : 3158656,
+    "uuid" : "fb92ce0c-1ee5-3f03-992c-df53ed9b3cb4",
+    "path" : "\/System\/Library\/Frameworks\/Carbon.framework\/Versions\/A\/Frameworks\/HIToolbox.framework\/Versions\/A\/HIToolbox",
+    "name" : "HIToolbox"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6860132352,
+    "size" : 651204,
+    "uuid" : "0975afba-c46b-364c-bd84-a75daa9e455a",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6864158720,
+    "size" : 33776,
+    "uuid" : "4dbaf982-1576-3ffc-86be-03a9d2c96be5",
+    "path" : "\/usr\/lib\/system\/libsystem_platform.dylib",
+    "name" : "libsystem_platform.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6863855616,
+    "size" : 246944,
+    "uuid" : "548c45c8-9733-3f0d-8ef4-c06df1df2ad0",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6864392192,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.CoreFoundation",
+    "size" : 5540928,
+    "uuid" : "649000a2-3eb4-3cf5-970a-d3cb37b5780c",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/Versions\/A\/CoreFoundation",
+    "name" : "CoreFoundation",
+    "CFBundleVersion" : "4201"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6864105472,
+    "size" : 51900,
+    "uuid" : "527c4ba0-91a5-378b-b3e2-d38269ca5a66",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7071834112,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.audio.caulk",
+    "size" : 167296,
+    "uuid" : "d4644b08-911d-30af-82e7-c404878abf47",
+    "path" : "\/System\/Library\/PrivateFrameworks\/caulk.framework\/Versions\/A\/caulk",
+    "name" : "caulk"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6915575808,
+    "CFBundleShortVersionString" : "5.0",
+    "CFBundleIdentifier" : "com.apple.audio.CoreAudio",
+    "size" : 8041856,
+    "uuid" : "f37b241b-2a83-3f86-bd94-329a18ba4715",
+    "path" : "\/System\/Library\/Frameworks\/CoreAudio.framework\/Versions\/A\/CoreAudio",
+    "name" : "CoreAudio",
+    "CFBundleVersion" : "5.0"
+  }
+],
+  "sharedCache" : {
+  "base" : 6859046912,
+  "size" : 5653544960,
+  "uuid" : "acb998b6-263c-3634-b0a8-ae8270a116c2"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=1.8G resident=0K(0%) swapped_out_or_unallocated=1.8G(100%)\nWritable regions: Total=300.0M written=1073K(0%) resident=753K(0%) swapped_out=320K(0%) unallocated=299.0M(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nAccelerate framework               128K        1 \nActivity Tracing                   256K        1 \nAttributeGraph Data               1024K        1 \nColorSync                           16K        1 \nCoreAnimation                     1360K       31 \nCoreGraphics                        32K        2 \nCoreUI image data                  752K        6 \nFoundation                         144K        3 \nKernel Alloc Once                   64K        2 \nMALLOC                           283.8M       65 \nMALLOC guard page                 4032K        4 \nSTACK GUARD                       56.1M        9 \nStack                             12.3M       10 \nVM_ALLOCATE                        352K       13 \n__AUTH                            5721K      625 \n__AUTH_CONST                      86.9M     1002 \n__CTF                               824        1 \n__DATA                            34.6M      984 \n__DATA_CONST                      34.1M     1045 \n__DATA_DIRTY                      8193K      863 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       607.7M       40 \n__OBJC_RO                         78.4M        1 \n__OBJC_RW                         2570K        1 \n__TEXT                             1.2G     1068 \n__TPRO_CONST                       128K        2 \ndyld private memory                128K        1 \nmapped file                      308.3M       36 \npage table in kernel               753K        1 \nshared memory                     1616K       23 \n===========                     =======  ======= \nTOTAL                              2.7G     5844 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "78d618227672e859f10f86a4135a80dc4725cae3",
+  "bug_type" : "309",
+  "roots_installed" : 0,
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "695fd05d8ca5554688521e5e",
+      "factorPackIds" : [
+        "695fd08781fcd20ded79c1d3",
+        "695fd0d28ca5554688521e5f",
+        "695fd09c8774dc09015a80e9",
+        "695fd0b18774dc09015a80ea"
+      ],
+      "deploymentId" : 3
+    },
+    {
+      "rolloutId" : "642da32dea3b2418c750f848",
+      "factorPackIds" : [
+        "66d8b2f77cd4b62688efd2cf"
+      ],
+      "deploymentId" : 240000011
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}
+
+Model: Mac16,8, BootROM 13822.61.10, proc 12:8:4 processors, 24 GB, SMC 
+Graphics: Apple M4 Pro, Apple M4 Pro, Built-In
+Display: Color LCD, 3024 x 1964 Retina, Main, MirrorOff, Online
+Memory Module: LPDDR5, Micron
+AirPort: spairport_wireless_card_type_wifi (0x14E4, 0x4388), wl0: Oct  3 2025 00:48:50 version 23.41.7.0.41.51.200 FWID 01-8b09c4e0
+IO80211_driverkit-1533.5 "IO80211_driverkit-1533.5" Nov 14 2025 18:26:34
+AirPort: 
+Bluetooth: Version (null), 0 services, 0 devices, 0 incoming serial ports
+Network Service: Wi-Fi, AirPort, en0
+Thunderbolt Bus: MacBook Pro, Apple Inc.
+Thunderbolt Bus: MacBook Pro, Apple Inc.
+Thunderbolt Bus: MacBook Pro, Apple Inc.
