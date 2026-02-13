@@ -4,7 +4,7 @@
 
 #include <QAudioSink>
 #include <QBuffer>
-#include <QElapsedTimer>
+#include <QImage>
 #include <QTimer>
 #include <QWidget>
 
@@ -30,6 +30,7 @@ protected:
   void mousePressEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
 
 private:
   struct Range {
@@ -49,6 +50,9 @@ private:
   int xToSample(const QPoint& pt) const;
   void updatePlayhead();
   void updateYRange();
+  void invalidateStaticLayer();
+  void ensureStaticLayer(const QRect& plot);
+  int sampleToX(const QRect& plot, int sample) const;
 
   QString varName_;
   SignalData data_;
@@ -69,6 +73,17 @@ private:
   QBuffer* audioBuffer_ = nullptr;
   QByteArray pcmData_;
   QTimer playheadTimer_;
-  QElapsedTimer playheadClock_;
   Range playingRange_{};
+
+  QImage staticLayer_;
+  bool staticLayerValid_ = false;
+  QRect staticPlotRect_;
+  int dataSerial_ = 0;
+  int cachedDataSerial_ = -1;
+  int cachedViewStart_ = -1;
+  int cachedViewLen_ = -1;
+  double cachedYMin_ = 0.0;
+  double cachedYMax_ = 0.0;
+  StereoMode cachedStereoMode_ = StereoMode::Vertical;
+  bool cachedWorkspaceActive_ = true;
 };

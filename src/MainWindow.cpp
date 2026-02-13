@@ -22,6 +22,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace {
@@ -414,15 +415,15 @@ void MainWindow::playSelectedAudioFromVarBox() {
   QAudioFormat fmt;
   fmt.setSampleRate(sig->sampleRate > 0 ? sig->sampleRate : 22050);
   fmt.setChannelCount(chCount);
-  fmt.setSampleFormat(QAudioFormat::Float);
+  fmt.setSampleFormat(QAudioFormat::Int16);
 
-  varPcmData_.resize(frames * chCount * static_cast<int>(sizeof(float)));
-  auto* out = reinterpret_cast<float*>(varPcmData_.data());
+  varPcmData_.resize(frames * chCount * static_cast<int>(sizeof(qint16)));
+  auto* out = reinterpret_cast<qint16*>(varPcmData_.data());
   for (int i = 0; i < frames; ++i) {
     for (int c = 0; c < chCount; ++c) {
       const auto& src = sig->channels[static_cast<size_t>(c)].samples;
-      float v = i < static_cast<int>(src.size()) ? static_cast<float>(std::clamp(src[static_cast<size_t>(i)], -1.0, 1.0)) : 0.0f;
-      *out++ = v;
+      const double v = i < static_cast<int>(src.size()) ? std::clamp(src[static_cast<size_t>(i)], -1.0, 1.0) : 0.0;
+      *out++ = static_cast<qint16>(std::lrint(v * 32767.0));
     }
   }
 
