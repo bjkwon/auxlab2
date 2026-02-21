@@ -14,6 +14,7 @@ class QTreeWidgetItem;
 class CommandConsole;
 class SignalGraphWindow;
 class SignalTableWindow;
+class TextObjectWindow;
 class UdfDebugWindow;
 
 class MainWindow : public QMainWindow {
@@ -30,6 +31,7 @@ private:
   enum class WindowKind {
     Graph,
     Table,
+    Text,
   };
 
   struct ScopedWindow {
@@ -63,13 +65,15 @@ private:
 
   bool variableSupportsSignalDisplay(const QString& varName) const;
   bool variableIsAudio(const QString& varName) const;
+  bool variableIsString(const QString& varName) const;
 
   void handleDebugAction(auxDebugAction action);
 
   AuxEngineFacade engine_;
 
   CommandConsole* commandBox_ = nullptr;
-  QTreeWidget* variableBox_ = nullptr;
+  QTreeWidget* audioVariableBox_ = nullptr;
+  QTreeWidget* nonAudioVariableBox_ = nullptr;
   QListWidget* historyBox_ = nullptr;
   UdfDebugWindow* debugWindow_ = nullptr;
 

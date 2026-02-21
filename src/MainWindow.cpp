@@ -3,6 +3,7 @@
 #include "CommandConsole.h"
 #include "SignalGraphWindow.h"
 #include "SignalTableWindow.h"
+#include "TextObjectWindow.h"
 #include "UdfDebugWindow.h"
 
 #include <QAudioFormat>
@@ -12,6 +13,7 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QListWidget>
+#include <QLabel>
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -34,6 +36,14 @@ QString historyFilePath() {
   QDir d(dir);
   d.mkpath(".");
   return d.filePath("auxlab2.history");
+}
+
+QString truncateDisplayText(const std::string& s, int maxChars = 140) {
+  const QString q = QString::fromStdString(s);
+  if (q.size() <= maxChars) {
+    return q;
+  }
+  return q.left(maxChars - 3) + "...";
 }
 }  // namespace
 
@@ -66,20 +76,52 @@ void MainWindow::buildUi() {
 
   commandBox_ = new CommandConsole(this);
 
-  variableBox_ = new QTreeWidget(this);
-  variableBox_->setColumnCount(3);
-  variableBox_->setHeaderLabels({"Variable", "Type", "Info"});
-  variableBox_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-  variableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-  variableBox_->header()->setSectionResizeMode(2, QHeaderView::Stretch);
-  variableBox_->installEventFilter(this);
+  auto* variablePanel = new QWidget(this);
+  auto* variableLayout = new QVBoxLayout(variablePanel);
+  variableLayout->setContentsMargins(0, 0, 0, 0);
+
+  auto* variableSectionSplitter = new QSplitter(Qt::Vertical, variablePanel);
+
+  auto* audioSection = new QWidget(variableSectionSplitter);
+  auto* audioLayout = new QVBoxLayout(audioSection);
+  audioLayout->setContentsMargins(0, 0, 0, 0);
+  audioLayout->addWidget(new QLabel("Audio Objects", audioSection));
+  audioVariableBox_ = new QTreeWidget(audioSection);
+  audioVariableBox_->setColumnCount(4);
+  audioVariableBox_->setHeaderLabels({"Name", "dbRMS", "Size", "Signal Intervals (ms)"});
+  audioVariableBox_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  audioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  audioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  audioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  audioVariableBox_->installEventFilter(this);
+  audioLayout->addWidget(audioVariableBox_);
+
+  auto* nonAudioSection = new QWidget(variableSectionSplitter);
+  auto* nonAudioLayout = new QVBoxLayout(nonAudioSection);
+  nonAudioLayout->setContentsMargins(0, 0, 0, 0);
+  nonAudioLayout->addWidget(new QLabel("Non-Audio Objects", nonAudioSection));
+  nonAudioVariableBox_ = new QTreeWidget(nonAudioSection);
+  nonAudioVariableBox_->setColumnCount(4);
+  nonAudioVariableBox_->setHeaderLabels({"Name", "Type", "Size", "Content"});
+  nonAudioVariableBox_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  nonAudioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  nonAudioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  nonAudioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  nonAudioVariableBox_->installEventFilter(this);
+  nonAudioLayout->addWidget(nonAudioVariableBox_);
+
+  variableSectionSplitter->addWidget(audioSection);
+  variableSectionSplitter->addWidget(nonAudioSection);
+  variableSectionSplitter->setStretchFactor(0, 1);
+  variableSectionSplitter->setStretchFactor(1, 1);
+  variableLayout->addWidget(variableSectionSplitter);
 
   historyBox_ = new QListWidget(this);
   historyBox_->setSelectionMode(QAbstractItemView::SingleSelection);
   historyBox_->installEventFilter(this);
 
   splitter->addWidget(commandBox_);
-  splitter->addWidget(variableBox_);
+  splitter->addWidget(variablePanel);
   splitter->addWidget(historyBox_);
   splitter->setStretchFactor(0, 3);
   splitter->setStretchFactor(1, 2);
@@ -104,9 +146,11 @@ void MainWindow::connectSignals() {
     injectCommandFromHistory(item->text(), true);
   });
 
-  connect(variableBox_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem*, int) {
+  auto variableDoubleClick = [this](QTreeWidgetItem*, int) {
     openSignalTableForSelected();
-  });
+  };
+  connect(audioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
+  connect(nonAudioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
 
   connect(debugWindow_, &UdfDebugWindow::debugStepOver, this, [this]() {
     handleDebugAction(auxDebugAction::AUX_DEBUG_STEP);
@@ -142,7 +186,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     }
   }
 
-  if (watched == variableBox_ && event->type() == QEvent::KeyPress) {
+  if ((watched == audioVariableBox_ || watched == nonAudioVariableBox_) && event->type() == QEvent::KeyPress) {
     auto* ke = static_cast<QKeyEvent*>(event);
     if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
       openSignalGraphForSelected();
@@ -183,7 +227,16 @@ void MainWindow::runCommand(const QString& cmd) {
 }
 
 QString MainWindow::selectedVarName() const {
-  auto* item = variableBox_->currentItem();
+  QTreeWidgetItem* item = nullptr;
+  if (audioVariableBox_->hasFocus()) {
+    item = audioVariableBox_->currentItem();
+  } else if (nonAudioVariableBox_->hasFocus()) {
+    item = nonAudioVariableBox_->currentItem();
+  } else if (audioVariableBox_->currentItem()) {
+    item = audioVariableBox_->currentItem();
+  } else {
+    item = nonAudioVariableBox_->currentItem();
+  }
   if (!item) {
     return {};
   }
@@ -191,14 +244,32 @@ QString MainWindow::selectedVarName() const {
 }
 
 void MainWindow::refreshVariables() {
-  variableBox_->clear();
+  const QString selected = selectedVarName();
+  audioVariableBox_->clear();
+  nonAudioVariableBox_->clear();
 
   const auto vars = engine_.listVariables();
   for (const auto& v : vars) {
-    auto* item = new QTreeWidgetItem(variableBox_);
+    auto* box = v.isAudio ? audioVariableBox_ : nonAudioVariableBox_;
+    auto* item = new QTreeWidgetItem(box);
     item->setText(0, QString::fromStdString(v.name));
-    item->setText(1, QString("0x%1").arg(v.type, 4, 16, QLatin1Char('0')));
-    item->setText(2, QString::fromStdString(v.preview));
+    const QString infoText = truncateDisplayText(v.preview);
+    const QString fullInfo = QString::fromStdString(v.preview);
+    if (v.isAudio) {
+      item->setText(1, QString::fromStdString(v.rms));
+      item->setText(2, QString::fromStdString(v.size));
+      item->setText(3, infoText);
+      item->setToolTip(3, fullInfo);
+    } else {
+      item->setText(1, QString::fromStdString(v.typeTag));
+      item->setText(2, QString::fromStdString(v.size));
+      item->setText(3, infoText);
+      item->setToolTip(3, fullInfo);
+    }
+
+    if (selected == item->text(0)) {
+      box->setCurrentItem(item);
+    }
   }
 }
 
@@ -363,7 +434,23 @@ void MainWindow::openSignalGraphForSelected() {
 
 void MainWindow::openSignalTableForSelected() {
   const QString var = selectedVarName();
-  if (var.isEmpty() || !variableSupportsSignalDisplay(var)) {
+  if (var.isEmpty()) {
+    return;
+  }
+
+  if (variableIsString(var)) {
+    auto text = engine_.getStringValue(var.toStdString());
+    if (!text) {
+      return;
+    }
+    auto* w = new TextObjectWindow(var, QString::fromStdString(*text));
+    w->setAttribute(Qt::WA_DeleteOnClose, true);
+    trackWindow(var, w, WindowKind::Text);
+    w->show();
+    return;
+  }
+
+  if (!variableSupportsSignalDisplay(var)) {
     return;
   }
 
@@ -495,6 +582,10 @@ bool MainWindow::variableSupportsSignalDisplay(const QString& varName) const {
 bool MainWindow::variableIsAudio(const QString& varName) const {
   auto sig = engine_.getSignalData(varName.toStdString());
   return sig.has_value() && sig->isAudio;
+}
+
+bool MainWindow::variableIsString(const QString& varName) const {
+  return engine_.isStringVar(varName.toStdString());
 }
 
 void MainWindow::handleDebugAction(auxDebugAction action) {

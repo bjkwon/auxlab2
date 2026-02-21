@@ -8,6 +8,9 @@
 struct VarSnapshot {
   std::string name;
   uint16_t type = 0;
+  std::string typeTag;
+  std::string size;
+  std::string rms;
   std::string preview;
   bool isAudio = false;
   int channels = 0;
@@ -38,6 +41,8 @@ public:
 
   std::vector<VarSnapshot> listVariables() const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
+  bool isStringVar(const std::string& varName) const;
+  std::optional<std::string> getStringValue(const std::string& varName) const;
 
   bool deleteVar(const std::string& varName);
 
