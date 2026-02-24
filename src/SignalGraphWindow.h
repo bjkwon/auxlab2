@@ -30,6 +30,7 @@ protected:
   void mousePressEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
+  void leaveEvent(QEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
 
 private:
@@ -42,6 +43,7 @@ private:
   void cycleStereoMode();
   void zoomIn();
   void zoomOut();
+  void panView(int direction);
   void togglePlayPause();
   void stopPlayback();
   void startPlaybackForRange(const Range& range);
@@ -53,6 +55,11 @@ private:
   void invalidateStaticLayer();
   void ensureStaticLayer(const QRect& plot);
   int sampleToX(const QRect& plot, int sample) const;
+  QRect plotRect() const;
+  void updateHoverFromPoint(const QPoint& pt);
+  QString formatTimeValue(int sample, bool withSuffix) const;
+  QString formatRmsInfo(const Range& range) const;
+  void drawStatusBar(QPainter& p) const;
 
   QString varName_;
   SignalData data_;
@@ -66,6 +73,9 @@ private:
   bool selecting_ = false;
   int selStart_ = -1;
   int selEnd_ = -1;
+  bool hoverActive_ = false;
+  int hoverSample_ = -1;
+  double hoverValue_ = 0.0;
 
   StereoMode stereoMode_ = StereoMode::Vertical;
 

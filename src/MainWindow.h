@@ -11,6 +11,8 @@
 class QListWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QAction;
+class QMenu;
 class CommandConsole;
 class SignalGraphWindow;
 class SignalTableWindow;
@@ -42,6 +44,7 @@ private:
   };
 
   void buildUi();
+  void buildMenus();
   void connectSignals();
 
   void runCommand(const QString& cmd);
@@ -57,17 +60,36 @@ private:
   void reverseSearchFromCommand();
 
   void openSignalGraphForSelected();
+  void focusSignalGraphForSelected();
   void openSignalTableForSelected();
   void playSelectedAudioFromVarBox();
 
   void trackWindow(const QString& varName, QWidget* window, WindowKind kind);
+  SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
+  void focusWindow(QWidget* window) const;
   void reconcileScopedWindows();
 
   bool variableSupportsSignalDisplay(const QString& varName) const;
   bool variableIsAudio(const QString& varName) const;
   bool variableIsString(const QString& varName) const;
+  bool variableIsBinary(const QString& varName) const;
 
   void handleDebugAction(auxDebugAction action);
+  void toggleDebugWindowVisible(bool visible);
+  void focusMainWindow();
+  void focusDebugWindow();
+  void openUdfFile();
+  void openRecentUdf();
+  void closeUdfFile();
+  void updateRecentUdfMenu();
+  void addRecentUdfFile(const QString& filePath);
+  void loadRecentUdfFiles();
+  void saveRecentUdfFiles() const;
+  void loadPersistedRuntimeSettings();
+  void savePersistedRuntimeSettings() const;
+  void toggleBreakpointAtCursor();
+  void setBreakpointAtLine(int lineNumber, bool enable);
+  void showSettingsDialog();
 
   AuxEngineFacade engine_;
 
@@ -76,6 +98,19 @@ private:
   QTreeWidget* nonAudioVariableBox_ = nullptr;
   QListWidget* historyBox_ = nullptr;
   UdfDebugWindow* debugWindow_ = nullptr;
+  QAction* showDebugWindowAction_ = nullptr;
+  QAction* focusMainWindowAction_ = nullptr;
+  QAction* focusDebugWindowAction_ = nullptr;
+  QAction* openUdfFileAction_ = nullptr;
+  QAction* closeUdfFileAction_ = nullptr;
+  QAction* showSettingsAction_ = nullptr;
+  QAction* toggleBreakpointAction_ = nullptr;
+  QAction* debugContinueAction_ = nullptr;
+  QAction* debugStepOverAction_ = nullptr;
+  QAction* debugStepInAction_ = nullptr;
+  QAction* debugStepOutAction_ = nullptr;
+  QAction* debugAbortAction_ = nullptr;
+  QMenu* openRecentMenu_ = nullptr;
 
   std::vector<ScopedWindow> scopedWindows_;
 
@@ -88,4 +123,8 @@ private:
   bool reverseSearchActive_ = false;
   QString reverseSearchTerm_;
   int reverseSearchIndex_ = -1;
+
+  QString currentUdfFilePath_;
+  QString currentUdfName_;
+  QStringList recentUdfFiles_;
 };

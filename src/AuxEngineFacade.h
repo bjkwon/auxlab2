@@ -2,6 +2,7 @@
 
 #include <auxe/auxe.h>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,22 @@ struct ChannelData {
 struct SignalData {
   bool isAudio = false;
   int sampleRate = 0;
+  double startTimeSec = 0.0;
   std::vector<ChannelData> channels;
+};
+
+struct BinaryData {
+  std::vector<unsigned char> bytes;
+};
+
+struct RuntimeSettingsSnapshot {
+  int sampleRate = 0;
+  int displayPrecision = 0;
+  int displayLimitX = 0;
+  int displayLimitY = 0;
+  int displayLimitBytes = 0;
+  int displayLimitStr = 0;
+  std::vector<std::string> udfPaths;
 };
 
 class AuxEngineFacade {
@@ -41,8 +57,13 @@ public:
 
   std::vector<VarSnapshot> listVariables() const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
+  std::optional<BinaryData> getBinaryData(const std::string& varName) const;
+  bool isBinaryVar(const std::string& varName) const;
   bool isStringVar(const std::string& varName) const;
   std::optional<std::string> getStringValue(const std::string& varName) const;
+  bool loadUdfFile(const std::string& fullPath, std::string& err);
+  bool setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err);
+  std::set<int> getBreakpoints(const std::string& udfName) const;
 
   bool deleteVar(const std::string& varName);
 
@@ -50,6 +71,8 @@ public:
   auxContext* activeContext() const;
   auxContext* rootContext() const;
   std::optional<auxDebugInfo> pauseInfo() const;
+  RuntimeSettingsSnapshot runtimeSettings() const;
+  bool applyRuntimeSettings(const RuntimeSettingsSnapshot& settings, std::string& err);
 
   bool hasDebugPauseInfo(auxDebugInfo& out) const;
   auxDebugAction debugResume(auxDebugAction action);

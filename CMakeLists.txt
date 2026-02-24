@@ -42,10 +42,14 @@ add_executable(auxlab2
   src/MainWindow.cpp
   src/SignalGraphWindow.h
   src/SignalGraphWindow.cpp
+  src/DebugCodeEditor.h
+  src/DebugCodeEditor.cpp
   src/SignalTableWindow.h
   src/SignalTableWindow.cpp
   src/TextObjectWindow.h
   src/TextObjectWindow.cpp
+  src/BinaryObjectWindow.h
+  src/BinaryObjectWindow.cpp
   src/UdfDebugWindow.h
   src/UdfDebugWindow.cpp
 )
