@@ -7,6 +7,7 @@
 #include "TextObjectWindow.h"
 #include "UdfDebugWindow.h"
 
+#include <QAbstractItemView>
 #include <QAudioFormat>
 #include <QAction>
 #include <QApplication>
@@ -123,6 +124,7 @@ void MainWindow::buildUi() {
   audioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   audioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   audioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  audioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   audioVariableBox_->installEventFilter(this);
   audioLayout->addWidget(audioVariableBox_);
 
@@ -137,6 +139,7 @@ void MainWindow::buildUi() {
   nonAudioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   nonAudioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   nonAudioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  nonAudioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   nonAudioVariableBox_->installEventFilter(this);
   nonAudioLayout->addWidget(nonAudioVariableBox_);
 
@@ -369,6 +372,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 
   if ((watched == audioVariableBox_ || watched == nonAudioVariableBox_) && event->type() == QEvent::KeyPress) {
     auto* ke = static_cast<QKeyEvent*>(event);
+    auto* box = qobject_cast<QTreeWidget*>(watched);
+    if (ke->key() == Qt::Key_Delete && (ke->modifiers() & Qt::ShiftModifier) && box) {
+      deleteVariablesFromBox(box);
+      return true;
+    }
     if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
       if (watched == audioVariableBox_) {
         focusSignalGraphForSelected();
@@ -615,6 +623,7 @@ void MainWindow::runCommand(const QString& cmd) {
   if (!actual.trimmed().isEmpty()) {
     addHistory(actual);
     auto result = engine_.eval(actual.toStdString());
+    updateCommandPrompt();
     const QString trimmed = actual.trimmed();
     const bool suppressEcho = trimmed.endsWith(';');
     const bool isOk = result.status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
@@ -629,6 +638,7 @@ void MainWindow::runCommand(const QString& cmd) {
     reverseSearchTerm_.clear();
     reverseSearchIndex_ = -1;
   } else {
+    updateCommandPrompt();
     commandBox_->appendExecutionResult({});
     historyNavIndex_ = -1;
     historyDraft_.clear();
@@ -640,6 +650,26 @@ void MainWindow::runCommand(const QString& cmd) {
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();
+}
+
+void MainWindow::updateCommandPrompt() {
+  if (!commandBox_) {
+    return;
+  }
+
+  QString prompt = "AUX> ";
+  if (engine_.isPaused()) {
+    const auto infoOpt = engine_.pauseInfo();
+    if (infoOpt && infoOpt->line > 0) {
+      const QString filename = QString::fromStdString(infoOpt->filename);
+      const QString udfName = QFileInfo(filename).completeBaseName();
+      const QString displayName = udfName.isEmpty() ? QFileInfo(filename).fileName() : udfName;
+      if (!displayName.isEmpty()) {
+        prompt = QString("%1:%2> ").arg(displayName).arg(infoOpt->line);
+      }
+    }
+  }
+  commandBox_->setPrompt(prompt);
 }
 
 QString MainWindow::selectedVarName() const {
@@ -657,6 +687,46 @@ QString MainWindow::selectedVarName() const {
     return {};
   }
   return item->text(0);
+}
+
+QStringList MainWindow::selectedVarNames(QTreeWidget* box) const {
+  QStringList names;
+  if (!box) {
+    return names;
+  }
+
+  const auto selectedItems = box->selectedItems();
+  names.reserve(selectedItems.size());
+  for (auto* item : selectedItems) {
+    if (item) {
+      names.push_back(item->text(0));
+    }
+  }
+  names.removeDuplicates();
+  return names;
+}
+
+void MainWindow::deleteVariablesFromBox(QTreeWidget* box) {
+  const QStringList names = selectedVarNames(box);
+  if (names.isEmpty()) {
+    return;
+  }
+
+  int deleted = 0;
+  for (const QString& name : names) {
+    if (engine_.deleteVar(name.toStdString())) {
+      ++deleted;
+    }
+  }
+
+  if (deleted > 0) {
+    statusBar()->showMessage(QString("Deleted %1 variable%2").arg(deleted).arg(deleted == 1 ? "" : "s"), 2000);
+  } else {
+    statusBar()->showMessage("No variables deleted.", 2000);
+  }
+  refreshVariables();
+  refreshDebugView();
+  reconcileScopedWindows();
 }
 
 void MainWindow::refreshVariables() {
@@ -691,6 +761,7 @@ void MainWindow::refreshVariables() {
 
 void MainWindow::refreshDebugView() {
   const bool paused = engine_.isPaused();
+  updateCommandPrompt();
   debugWindow_->setPaused(paused);
   if (toggleBreakpointAction_) toggleBreakpointAction_->setEnabled(!currentUdfName_.isEmpty());
   if (debugContinueAction_) debugContinueAction_->setEnabled(paused);

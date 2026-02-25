@@ -10,6 +10,7 @@ public:
 
   QString currentCommand() const;
   void setCurrentCommand(const QString& cmd);
+  void setPrompt(const QString& prompt);
   void submitCurrentCommand();
   void appendExecutionResult(const QString& output);
 

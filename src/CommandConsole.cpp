@@ -52,6 +52,28 @@ QString CommandConsole::currentCommand() const {
   return out;
 }
 
+void CommandConsole::setPrompt(const QString& prompt) {
+  if (prompt == prompt_) {
+    return;
+  }
+
+  const QString oldPrompt = prompt_;
+  const int oldInputStart = inputStartPos_;
+  const int promptStart = oldInputStart - oldPrompt.size();
+  if (promptStart < 0) {
+    prompt_ = prompt;
+    return;
+  }
+
+  QTextCursor c(document());
+  c.setPosition(promptStart);
+  c.setPosition(oldInputStart, QTextCursor::KeepAnchor);
+  c.removeSelectedText();
+  c.insertText(prompt);
+  prompt_ = prompt;
+  inputStartPos_ = promptStart + prompt.size();
+}
+
 void CommandConsole::setCurrentCommand(const QString& cmd) {
   QTextCursor c(document());
   c.setPosition(inputStartPos_);
@@ -84,11 +106,8 @@ void CommandConsole::appendExecutionResult(const QString& output) {
 }
 
 void CommandConsole::keyPressEvent(QKeyEvent* event) {
-  ensureEditableCursor();
-
   const int key = event->key();
   const auto mods = event->modifiers();
-  QTextCursor c = textCursor();
 
   if ((key == Qt::Key_Return || key == Qt::Key_Enter) && !(mods & Qt::ShiftModifier)) {
     emit commandSubmitted(currentCommand());
@@ -101,6 +120,25 @@ void CommandConsole::keyPressEvent(QKeyEvent* event) {
 #else
   const bool ctrlLike = (mods & Qt::ControlModifier);
 #endif
+
+  const bool clipboardEditShortcut = ctrlLike && (key == Qt::Key_V || key == Qt::Key_X);
+  const QString keyText = event->text();
+  const bool plainTextInput =
+      !ctrlLike &&
+      !(mods & Qt::AltModifier) &&
+      !keyText.isEmpty() &&
+      keyText.at(0).isPrint();
+  const bool modifiesText =
+      clipboardEditShortcut ||
+      plainTextInput ||
+      key == Qt::Key_Backspace ||
+      key == Qt::Key_Delete;
+
+  if (modifiesText) {
+    ensureEditableCursor();
+  }
+
+  QTextCursor c = textCursor();
 
   if (ctrlLike && key == Qt::Key_R) {
     emit reverseSearchRequested();
@@ -194,24 +232,24 @@ void CommandConsole::keyPressEvent(QKeyEvent* event) {
     return;
   }
 
-  if (c.hasSelection() && c.selectionStart() < inputStartPos_) {
+  if (modifiesText && c.hasSelection() && c.selectionStart() < inputStartPos_) {
     c.setPosition(inputStartPos_);
     c.movePosition(QTextCursor::End);
     setTextCursor(c);
   }
 
   QPlainTextEdit::keyPressEvent(event);
-  ensureEditableCursor();
+  if (modifiesText) {
+    ensureEditableCursor();
+  }
 }
 
 void CommandConsole::mousePressEvent(QMouseEvent* event) {
   QPlainTextEdit::mousePressEvent(event);
-  ensureEditableCursor();
 }
 
 void CommandConsole::mouseReleaseEvent(QMouseEvent* event) {
   QPlainTextEdit::mouseReleaseEvent(event);
-  ensureEditableCursor();
 }
 
 void CommandConsole::appendPrompt() {

@@ -7,6 +7,7 @@
 #include <QCloseEvent>
 #include <QMainWindow>
 #include <QPointer>
+#include <QStringList>
 
 class QListWidget;
 class QTreeWidget;
@@ -48,7 +49,10 @@ private:
   void connectSignals();
 
   void runCommand(const QString& cmd);
+  void updateCommandPrompt();
   QString selectedVarName() const;
+  QStringList selectedVarNames(QTreeWidget* box) const;
+  void deleteVariablesFromBox(QTreeWidget* box);
   void refreshVariables();
   void refreshDebugView();
 
