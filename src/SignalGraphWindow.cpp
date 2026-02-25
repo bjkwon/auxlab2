@@ -29,6 +29,77 @@ int totalTimelineSamples(const SignalData& data) {
   }
   return timelineOffsetSamples(data) + static_cast<int>(data.channels.front().samples.size());
 }
+
+double niceNumber(double x, bool roundValue) {
+  if (x <= 0.0) {
+    return 1.0;
+  }
+  const double exponent = std::floor(std::log10(x));
+  const double fraction = x / std::pow(10.0, exponent);
+  double niceFraction = 1.0;
+
+  if (roundValue) {
+    if (fraction < 1.5) {
+      niceFraction = 1.0;
+    } else if (fraction < 3.0) {
+      niceFraction = 2.0;
+    } else if (fraction < 7.0) {
+      niceFraction = 5.0;
+    } else {
+      niceFraction = 10.0;
+    }
+  } else {
+    if (fraction <= 1.0) {
+      niceFraction = 1.0;
+    } else if (fraction <= 2.0) {
+      niceFraction = 2.0;
+    } else if (fraction <= 5.0) {
+      niceFraction = 5.0;
+    } else {
+      niceFraction = 10.0;
+    }
+  }
+  return niceFraction * std::pow(10.0, exponent);
+}
+
+QString trimTrailingZeros(QString s) {
+  while (s.contains('.') && s.endsWith('0')) {
+    s.chop(1);
+  }
+  if (s.endsWith('.')) {
+    s.chop(1);
+  }
+  return s;
+}
+
+QString formatSecondsCompact(double sec) {
+  const double clamped = std::max(0.0, sec);
+  if (clamped >= 60.0) {
+    const int mins = static_cast<int>(std::floor(clamped / 60.0));
+    const double rem = clamped - mins * 60.0;
+    const double remRounded = std::round(rem);
+    if (std::fabs(rem - remRounded) < 1e-6) {
+      const int remInt = static_cast<int>(remRounded);
+      if (remInt == 0) {
+        return QString("%1m").arg(mins);
+      }
+      return QString("%1m%2s").arg(mins).arg(remInt);
+    }
+    return QString("%1m%2s").arg(mins).arg(trimTrailingZeros(QString::number(rem, 'f', 1)));
+  }
+
+  const double secRounded = std::round(clamped);
+  if (std::fabs(clamped - secRounded) < 1e-6) {
+    return QString::number(static_cast<int>(secRounded));
+  }
+  if (clamped >= 10.0) {
+    return trimTrailingZeros(QString::number(clamped, 'f', 1));
+  }
+  if (clamped >= 1.0) {
+    return trimTrailingZeros(QString::number(clamped, 'f', 2));
+  }
+  return trimTrailingZeros(QString::number(clamped, 'f', 3));
+}
 }  // namespace
 
 SignalGraphWindow::SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent, FftProvider fftProvider)
@@ -663,13 +734,60 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
     const double xStartVal = xIsTime ? (static_cast<double>(xFrom) / data_.sampleRate) : static_cast<double>(xFrom);
     const double xEndVal = xIsTime ? (static_cast<double>(xTo) / data_.sampleRate) : static_cast<double>(xTo);
     const double xSpan = std::max(1e-12, xEndVal - xStartVal);
-    const int xDigits = xSpan < 0.1 ? 4 : (xSpan < 1.0 ? 3 : 2);
     const double ySpan = std::max(1e-12, yMax_ - yMin_);
     const int yDigits = ySpan < 0.1 ? 4 : (ySpan < 1.0 ? 3 : 2);
+    std::vector<double> xTicks;
+    xTicks.reserve(10);
+    if (xIsTime) {
+      const bool longRange = xEndVal >= 60.0 || xSpan >= 60.0;
+      const double rawStep = xSpan / 6.0;
+      double step = niceNumber(rawStep, true);
+      if (longRange) {
+        step = std::max(1.0, std::round(step));
+      }
+      const double eps = step * 1e-6;
+      double t = std::ceil((xStartVal - eps) / step) * step;
+      while (t <= xEndVal + eps) {
+        if (t >= xStartVal - eps) {
+          xTicks.push_back(t);
+        }
+        t += step;
+      }
+      if (xTicks.empty()) {
+        xTicks.push_back(xEndVal);
+      } else {
+        const double diff = std::fabs(xTicks.back() - xEndVal);
+        const bool farInValue = diff > std::max(1e-6, step * 0.1);
+        const double pxDist = (diff / std::max(1e-12, xSpan)) * plot.width();
+        constexpr double kMinEndpointLabelSpacingPx = 56.0;
+        if (farInValue && pxDist >= kMinEndpointLabelSpacingPx) {
+          xTicks.push_back(xEndVal);
+        }
+      }
+    } else {
+      for (int i = 0; i < xTickCount; ++i) {
+        const double v = xStartVal + (xSpan * i) / (xTickCount - 1);
+        xTicks.push_back(v);
+      }
+    }
+
+    if (xTicks.size() > 8) {
+      std::vector<double> thinned;
+      thinned.reserve(8);
+      const size_t stride = static_cast<size_t>(std::ceil(xTicks.size() / 8.0));
+      for (size_t i = 0; i < xTicks.size(); i += std::max<size_t>(1, stride)) {
+        thinned.push_back(xTicks[i]);
+      }
+      if (!xTicks.empty() && (thinned.empty() || std::fabs(thinned.back() - xTicks.back()) > 1e-9)) {
+        thinned.push_back(xTicks.back());
+      }
+      xTicks.swap(thinned);
+    }
 
     p.setPen(QColor(112, 120, 112));
-    for (int i = 0; i < xTickCount; ++i) {
-      const int x = plot.left() + (i * plot.width()) / (xTickCount - 1);
+    for (double tick : xTicks) {
+      const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+      const int x = plot.left() + static_cast<int>(std::llround(frac * plot.width()));
       p.drawLine(x, plot.top(), x, plot.bottom());
     }
     for (int i = 0; i < yTickCount; ++i) {
@@ -701,12 +819,17 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
     p.drawText(QRect(plot.left(), plot.bottom() + 28, plot.width(), 20), Qt::AlignCenter, xLabel);
 
     p.setPen(QColor(36, 36, 36));
-    for (int i = 0; i < xTickCount; ++i) {
-      const int x = plot.left() + (i * plot.width()) / (xTickCount - 1);
-      const double v = xStartVal + (xSpan * i) / (xTickCount - 1);
+    for (double tick : xTicks) {
+      const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+      const int x = plot.left() + static_cast<int>(std::llround(frac * plot.width()));
       p.drawLine(x, plot.bottom(), x, plot.bottom() + 4);
-      const QString label = xIsTime ? QString::number(v, 'f', xDigits) : QString::number(static_cast<int>(std::llround(v)));
-      p.drawText(QRect(x - 28, plot.bottom() + 7, 56, 16), Qt::AlignHCenter | Qt::AlignTop, label);
+      QString label;
+      if (xIsTime) {
+        label = formatSecondsCompact(tick);
+      } else {
+        label = QString::number(static_cast<int>(std::llround(tick)));
+      }
+      p.drawText(QRect(x - 42, plot.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
     }
 
     for (int i = 0; i < yTickCount; ++i) {
@@ -789,7 +912,11 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
 QString SignalGraphWindow::formatTimeValue(int sample, bool withSuffix) const {
   if (data_.isAudio && data_.sampleRate > 0) {
     const double sec = static_cast<double>(sample) / static_cast<double>(data_.sampleRate);
-    return withSuffix ? QString("%1s").arg(sec, 0, 'f', 3) : QString::number(sec, 'f', 3);
+    const QString body = formatSecondsCompact(sec);
+    if (sec >= 60.0) {
+      return body;
+    }
+    return withSuffix ? body + "s" : body;
   }
   return withSuffix ? QString("%1i").arg(sample) : QString::number(sample);
 }
