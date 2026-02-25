@@ -7,17 +7,26 @@
 #include <QImage>
 #include <QTimer>
 #include <QWidget>
+#include <functional>
 
 class SignalGraphWindow : public QWidget {
   Q_OBJECT
 public:
+  using FftProvider = std::function<std::vector<std::vector<double>>(int, int)>;
+  struct FftPaneLayout {
+    int channel = 0;
+    QRect box;
+    QRect inner;
+    QRect leftMargin;
+  };
+
   enum class StereoMode {
     Vertical = 0,
     OverlayBlueRed = 1,
     OverlayRedBlue = 2,
   };
 
-  SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent = nullptr);
+  SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent = nullptr, FftProvider fftProvider = {});
   ~SignalGraphWindow() override;
 
   QString varName() const;
@@ -60,6 +69,11 @@ private:
   QString formatTimeValue(int sample, bool withSuffix) const;
   QString formatRmsInfo(const Range& range) const;
   void drawStatusBar(QPainter& p) const;
+  void toggleFftOverlay();
+  void ensureFftData();
+  void drawFftOverlays(QPainter& p, const QRect& plot);
+  std::vector<FftPaneLayout> buildFftPaneLayouts(const QRect& plot, int nChannels) const;
+  QPoint clampFftPaneOffset(const QRect& plot, const QPoint& desired, int channelIndex) const;
 
   QString varName_;
   SignalData data_;
@@ -76,8 +90,25 @@ private:
   bool hoverActive_ = false;
   int hoverSample_ = -1;
   double hoverValue_ = 0.0;
+  bool hoverInFft_ = false;
+  double hoverFftValue_ = 0.0;
+  double hoverFftFreqHz_ = 0.0;
 
   StereoMode stereoMode_ = StereoMode::Vertical;
+  bool showFftOverlay_ = false;
+  bool fftComputed_ = false;
+  FftProvider fftProvider_;
+  std::vector<std::vector<double>> fftDb_;
+  int fftViewStart_ = -1;
+  int fftViewLen_ = -1;
+  int fftDataSerial_ = -1;
+  std::vector<QPoint> fftPaneOffsets_;
+  bool fftMovePending_ = false;
+  bool fftMoveReady_ = false;
+  int fftMoveChannel_ = -1;
+  QPoint fftMovePressPos_;
+  QPoint fftMoveStartOffset_;
+  QTimer fftMoveHoldTimer_;
 
   QAudioSink* audioSink_ = nullptr;
   QBuffer* audioBuffer_ = nullptr;

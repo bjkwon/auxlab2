@@ -9,6 +9,7 @@
 
 #include <QAudioFormat>
 #include <QAction>
+#include <QApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -60,6 +61,16 @@ QString truncateDisplayText(const std::string& s, int maxChars = 140) {
     return q;
   }
   return q.left(maxChars - 3) + "...";
+}
+
+#ifdef Q_OS_MAC
+constexpr Qt::KeyboardModifier kPrimaryWindowModifier = Qt::MetaModifier;
+#else
+constexpr Qt::KeyboardModifier kPrimaryWindowModifier = Qt::ControlModifier;
+#endif
+
+QKeySequence primaryWindowShortcut(Qt::Key key, Qt::KeyboardModifiers extra = Qt::NoModifier) {
+  return QKeySequence(QKeyCombination(kPrimaryWindowModifier | extra, key));
 }
 }  // namespace
 
@@ -171,11 +182,69 @@ void MainWindow::buildMenus() {
   showDebugWindowAction_->setShortcut(QKeySequence("Ctrl+Alt+D"));
   showDebugWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
   focusDebugWindowAction_ = viewMenu->addAction("Focus &Debug Window");
-  focusDebugWindowAction_->setShortcut(QKeySequence("Ctrl+2"));
   focusDebugWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
   focusMainWindowAction_ = viewMenu->addAction("Focus &Main Window");
-  focusMainWindowAction_->setShortcut(QKeySequence("Ctrl+1"));
   focusMainWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
+
+  auto* windowMenu = menuBar()->addMenu("&Window");
+
+  auto* nextWindowAction = windowMenu->addAction("Next Window");
+  nextWindowAction->setShortcut(primaryWindowShortcut(Qt::Key_Tab));
+  nextWindowAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(nextWindowAction, &QAction::triggered, this, [this]() { focusScopedWindowByOffset(+1); });
+
+  auto* prevWindowAction = windowMenu->addAction("Previous Window");
+  prevWindowAction->setShortcut(primaryWindowShortcut(Qt::Key_Tab, Qt::ShiftModifier));
+  prevWindowAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(prevWindowAction, &QAction::triggered, this, [this]() { focusScopedWindowByOffset(-1); });
+
+  windowMenu->addSeparator();
+  for (int i = 1; i <= 9; ++i) {
+    auto* nthAction = windowMenu->addAction(QString("Focus Window %1").arg(i));
+    nthAction->setShortcut(primaryWindowShortcut(static_cast<Qt::Key>(Qt::Key_0 + i)));
+    nthAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(nthAction, &QAction::triggered, this, [this, i]() { focusScopedWindowByIndex(i); });
+  }
+
+  windowMenu->addSeparator();
+  auto* nextGraphAction = windowMenu->addAction("Next Graph Window");
+  nextGraphAction->setShortcut(primaryWindowShortcut(Qt::Key_G));
+  nextGraphAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(nextGraphAction, &QAction::triggered, this, [this]() {
+    focusScopedWindowByOffset(+1, WindowKind::Graph);
+  });
+
+  auto* prevGraphAction = windowMenu->addAction("Previous Graph Window");
+  prevGraphAction->setShortcut(primaryWindowShortcut(Qt::Key_G, Qt::ShiftModifier));
+  prevGraphAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(prevGraphAction, &QAction::triggered, this, [this]() {
+    focusScopedWindowByOffset(-1, WindowKind::Graph);
+  });
+
+  auto* nextTableAction = windowMenu->addAction("Next Table Window");
+  nextTableAction->setShortcut(primaryWindowShortcut(Qt::Key_T));
+  nextTableAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(nextTableAction, &QAction::triggered, this, [this]() {
+    focusScopedWindowByOffset(+1, WindowKind::Table);
+  });
+
+  auto* prevTableAction = windowMenu->addAction("Previous Table Window");
+  prevTableAction->setShortcut(primaryWindowShortcut(Qt::Key_T, Qt::ShiftModifier));
+  prevTableAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(prevTableAction, &QAction::triggered, this, [this]() {
+    focusScopedWindowByOffset(-1, WindowKind::Table);
+  });
+
+  windowMenu->addSeparator();
+  auto* toggleLastTwoAction = windowMenu->addAction("Toggle Last Two Windows");
+  toggleLastTwoAction->setShortcut(primaryWindowShortcut(Qt::Key_QuoteLeft));
+  toggleLastTwoAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(toggleLastTwoAction, &QAction::triggered, this, &MainWindow::toggleLastTwoScopedWindows);
+
+  auto* closeAllScopedAction = windowMenu->addAction("Close All Windows In Scope");
+  closeAllScopedAction->setShortcut(primaryWindowShortcut(Qt::Key_W, Qt::ShiftModifier));
+  closeAllScopedAction->setShortcutContext(Qt::ApplicationShortcut);
+  connect(closeAllScopedAction, &QAction::triggered, this, &MainWindow::closeAllScopedWindowsInCurrentScope);
 
   auto* settingsMenu = menuBar()->addMenu("&Settings");
   showSettingsAction_ = settingsMenu->addAction("View Runtime &Settings");
@@ -273,6 +342,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::WindowActivate || event->type() == QEvent::FocusIn) {
+    if (auto* w = qobject_cast<QWidget*>(watched)) {
+      noteScopedWindowFocus(w);
+    }
+  }
+
   if (watched == debugWindow_) {
     if (event->type() == QEvent::Hide && showDebugWindowAction_) {
       showDebugWindowAction_->setChecked(false);
@@ -783,7 +858,9 @@ void MainWindow::openSignalGraphForSelected() {
     return;
   }
 
-  auto* w = new SignalGraphWindow(var, *sig);
+  auto* w = new SignalGraphWindow(
+      var, *sig, nullptr,
+      [this, var](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(var.toStdString(), viewStart, viewLen); });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(var, w, WindowKind::Graph);
   focusWindow(w);
@@ -928,6 +1005,16 @@ void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind
   s.kind = kind;
   s.window = window;
   scopedWindows_.push_back(s);
+  window->installEventFilter(this);
+  connect(window, &QObject::destroyed, this, [this, window]() {
+    if (lastFocusedScopedWindow_ == window) {
+      lastFocusedScopedWindow_.clear();
+    }
+    if (prevFocusedScopedWindow_ == window) {
+      prevFocusedScopedWindow_.clear();
+    }
+    reconcileScopedWindows();
+  });
 
   reconcileScopedWindows();
 }
@@ -1002,6 +1089,109 @@ void MainWindow::reconcileScopedWindows() {
 
     ++it;
   }
+}
+
+std::vector<QWidget*> MainWindow::focusableScopedWindows(std::optional<WindowKind> kind) const {
+  std::vector<QWidget*> out;
+  const auto currentScope = engine_.activeContext();
+  out.reserve(scopedWindows_.size());
+  for (const auto& entry : scopedWindows_) {
+    if (!entry.window || entry.scope != currentScope) {
+      continue;
+    }
+    if (kind.has_value() && entry.kind != *kind) {
+      continue;
+    }
+    out.push_back(entry.window.data());
+  }
+  return out;
+}
+
+void MainWindow::focusScopedWindowByOffset(int delta, std::optional<WindowKind> kind) {
+  if (delta == 0) {
+    return;
+  }
+  reconcileScopedWindows();
+  const auto windows = focusableScopedWindows(kind);
+  if (windows.empty()) {
+    return;
+  }
+
+  QWidget* current = QApplication::activeWindow();
+  auto currentIt = std::find(windows.begin(), windows.end(), current);
+  if (currentIt == windows.end() && lastFocusedScopedWindow_) {
+    currentIt = std::find(windows.begin(), windows.end(), lastFocusedScopedWindow_.data());
+  }
+
+  int currentIndex = 0;
+  if (currentIt != windows.end()) {
+    currentIndex = static_cast<int>(std::distance(windows.begin(), currentIt));
+  }
+
+  const int n = static_cast<int>(windows.size());
+  const int next = ((currentIndex + delta) % n + n) % n;
+  focusWindow(windows[static_cast<size_t>(next)]);
+}
+
+void MainWindow::focusScopedWindowByIndex(int oneBasedIndex) {
+  if (oneBasedIndex < 1) {
+    return;
+  }
+  reconcileScopedWindows();
+  const auto windows = focusableScopedWindows();
+  if (oneBasedIndex > static_cast<int>(windows.size())) {
+    return;
+  }
+  focusWindow(windows[static_cast<size_t>(oneBasedIndex - 1)]);
+}
+
+void MainWindow::toggleLastTwoScopedWindows() {
+  reconcileScopedWindows();
+  if (!lastFocusedScopedWindow_ || !prevFocusedScopedWindow_) {
+    return;
+  }
+  QWidget* active = QApplication::activeWindow();
+  if (active == lastFocusedScopedWindow_.data()) {
+    focusWindow(prevFocusedScopedWindow_.data());
+  } else {
+    focusWindow(lastFocusedScopedWindow_.data());
+  }
+}
+
+void MainWindow::closeAllScopedWindowsInCurrentScope() {
+  reconcileScopedWindows();
+  const auto currentScope = engine_.activeContext();
+  std::vector<QWidget*> toClose;
+  toClose.reserve(scopedWindows_.size());
+  for (const auto& entry : scopedWindows_) {
+    if (entry.window && entry.scope == currentScope) {
+      toClose.push_back(entry.window.data());
+    }
+  }
+  for (QWidget* w : toClose) {
+    if (w) {
+      w->close();
+    }
+  }
+  reconcileScopedWindows();
+}
+
+void MainWindow::noteScopedWindowFocus(QWidget* window) {
+  if (!window) {
+    return;
+  }
+  const auto currentScope = engine_.activeContext();
+  auto it = std::find_if(scopedWindows_.begin(), scopedWindows_.end(), [window, currentScope](const ScopedWindow& entry) {
+    return entry.window.data() == window && entry.scope == currentScope;
+  });
+  if (it == scopedWindows_.end()) {
+    return;
+  }
+  if (lastFocusedScopedWindow_ == window) {
+    return;
+  }
+  prevFocusedScopedWindow_ = lastFocusedScopedWindow_;
+  lastFocusedScopedWindow_ = window;
 }
 
 bool MainWindow::variableSupportsSignalDisplay(const QString& varName) const {

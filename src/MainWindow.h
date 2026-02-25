@@ -68,6 +68,12 @@ private:
   SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
   void focusWindow(QWidget* window) const;
   void reconcileScopedWindows();
+  std::vector<QWidget*> focusableScopedWindows(std::optional<WindowKind> kind = std::nullopt) const;
+  void focusScopedWindowByOffset(int delta, std::optional<WindowKind> kind = std::nullopt);
+  void focusScopedWindowByIndex(int oneBasedIndex);
+  void toggleLastTwoScopedWindows();
+  void closeAllScopedWindowsInCurrentScope();
+  void noteScopedWindowFocus(QWidget* window);
 
   bool variableSupportsSignalDisplay(const QString& varName) const;
   bool variableIsAudio(const QString& varName) const;
@@ -113,6 +119,8 @@ private:
   QMenu* openRecentMenu_ = nullptr;
 
   std::vector<ScopedWindow> scopedWindows_;
+  mutable QPointer<QWidget> lastFocusedScopedWindow_;
+  mutable QPointer<QWidget> prevFocusedScopedWindow_;
 
   QAudioSink* varAudioSink_ = nullptr;
   QBuffer* varAudioBuffer_ = nullptr;

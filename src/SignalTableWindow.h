@@ -13,6 +13,9 @@ public:
   QString varName() const;
   void updateData(const SignalData& data);
 
+protected:
+  void keyPressEvent(QKeyEvent* event) override;
+
 private:
   void fillTable(const SignalData& data);
 

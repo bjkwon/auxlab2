@@ -370,6 +370,43 @@ std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varN
   return data;
 }
 
+std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const {
+  std::vector<std::vector<double>> out;
+  if (!activeCtx_) {
+    return out;
+  }
+
+  auto obj = aux_get_var(activeCtx_, varName);
+  if (!obj) {
+    return out;
+  }
+
+  const int channels = aux_num_channels(obj);
+  if (channels <= 0) {
+    return out;
+  }
+
+  int sampleRate = aux_get_fs(activeCtx_);
+  if (sampleRate <= 0) sampleRate = 1;
+  int offsetSamples = 0;
+  const auto sig = getSignalData(varName);
+  if (sig && sig->isAudio && sig->sampleRate > 0) {
+    sampleRate = sig->sampleRate;
+    offsetSamples = std::max(0, static_cast<int>(std::llround(sig->startTimeSec * sampleRate)));
+  }
+  const int start = std::max(0, viewStart);
+  const int len = std::max(1, viewLen);
+
+  out.resize(static_cast<size_t>(channels));
+  for (int ch = 0; ch < channels; ++ch) {
+    std::vector<double> db;
+    if (aux_fft_power_db(obj, ch, start, len, offsetSamples, db)) {
+      out[static_cast<size_t>(ch)] = std::move(db);
+    }
+  }
+  return out;
+}
+
 bool AuxEngineFacade::isStringVar(const std::string& varName) const {
   if (!activeCtx_) {
     return false;

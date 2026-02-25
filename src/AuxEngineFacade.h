@@ -57,6 +57,7 @@ public:
 
   std::vector<VarSnapshot> listVariables() const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
+  std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;
   std::optional<BinaryData> getBinaryData(const std::string& varName) const;
   bool isBinaryVar(const std::string& varName) const;
   bool isStringVar(const std::string& varName) const;

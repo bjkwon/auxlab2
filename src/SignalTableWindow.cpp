@@ -1,6 +1,7 @@
 #include "SignalTableWindow.h"
 
 #include <QHeaderView>
+#include <QKeyEvent>
 #include <QVBoxLayout>
 
 SignalTableWindow::SignalTableWindow(const QString& varName, const SignalData& data, QWidget* parent)
@@ -24,6 +25,21 @@ QString SignalTableWindow::varName() const {
 
 void SignalTableWindow::updateData(const SignalData& data) {
   fillTable(data);
+}
+
+void SignalTableWindow::keyPressEvent(QKeyEvent* event) {
+  const bool closeShortcut =
+#ifdef Q_OS_MAC
+      ((event->modifiers() & Qt::MetaModifier) && event->key() == Qt::Key_W);
+#else
+      ((event->modifiers() & Qt::ControlModifier) && event->key() == Qt::Key_W);
+#endif
+  if (closeShortcut) {
+    close();
+    event->accept();
+    return;
+  }
+  QWidget::keyPressEvent(event);
 }
 
 void SignalTableWindow::fillTable(const SignalData& data) {

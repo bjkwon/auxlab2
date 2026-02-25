@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace {
 constexpr double kRmsDbOffset = 3.0103;
@@ -30,8 +31,8 @@ int totalTimelineSamples(const SignalData& data) {
 }
 }  // namespace
 
-SignalGraphWindow::SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent)
-    : QWidget(parent), varName_(varName), data_(data) {
+SignalGraphWindow::SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent, FftProvider fftProvider)
+    : QWidget(parent), varName_(varName), data_(data), fftProvider_(std::move(fftProvider)) {
   setWindowTitle(QString("Signal Graph - %1").arg(varName_));
   resize(900, 460);
   setFocusPolicy(Qt::StrongFocus);
@@ -40,11 +41,21 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName, const SignalData& d
   if (!data_.channels.empty()) {
     viewStart_ = 0;
     viewLen_ = std::max(1, totalTimelineSamples(data_));
+    fftPaneOffsets_.assign(data_.channels.size(), QPoint(0, 0));
   }
   updateYRange();
 
   playheadTimer_.setInterval(16);
   connect(&playheadTimer_, &QTimer::timeout, this, &SignalGraphWindow::updatePlayhead);
+
+  fftMoveHoldTimer_.setSingleShot(true);
+  fftMoveHoldTimer_.setInterval(2000);
+  connect(&fftMoveHoldTimer_, &QTimer::timeout, this, [this]() {
+    if (fftMovePending_) {
+      fftMoveReady_ = true;
+      update();
+    }
+  });
 }
 
 SignalGraphWindow::~SignalGraphWindow() {
@@ -70,6 +81,11 @@ void SignalGraphWindow::updateData(const SignalData& data) {
 
   data_ = data;
   ++dataSerial_;
+  fftComputed_ = false;
+  fftDb_.clear();
+  fftViewStart_ = -1;
+  fftViewLen_ = -1;
+  fftDataSerial_ = -1;
   if (!data_.channels.empty()) {
     const int totalLen = std::max(1, totalTimelineSamples(data_));
     if (wasNearFullView) {
@@ -80,6 +96,14 @@ void SignalGraphWindow::updateData(const SignalData& data) {
       viewStart_ = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
       viewLen_ = std::clamp(viewLen_, 1, std::max(1, totalLen));
     }
+  }
+  if (fftPaneOffsets_.size() < data_.channels.size()) {
+    fftPaneOffsets_.resize(data_.channels.size(), QPoint(0, 0));
+  } else if (fftPaneOffsets_.size() > data_.channels.size()) {
+    fftPaneOffsets_.resize(data_.channels.size());
+  }
+  if (showFftOverlay_) {
+    ensureFftData();
   }
   updateYRange();
   invalidateStaticLayer();
@@ -116,10 +140,23 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
     p.drawLine(x, plot.top(), x, plot.bottom());
   }
 
+  drawFftOverlays(p, plot);
   drawStatusBar(p);
 }
 
 void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
+  const bool closeShortcut =
+#ifdef Q_OS_MAC
+      ((event->modifiers() & Qt::MetaModifier) && event->key() == Qt::Key_W);
+#else
+      ((event->modifiers() & Qt::ControlModifier) && event->key() == Qt::Key_W);
+#endif
+  if (closeShortcut) {
+    close();
+    event->accept();
+    return;
+  }
+
   if (!workspaceActive_) {
     return;
   }
@@ -143,6 +180,14 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
       break;
     case Qt::Key_F2:
       cycleStereoMode();
+      break;
+    case Qt::Key_F4:
+      if (event->modifiers() & Qt::ShiftModifier) {
+        fftPaneOffsets_.assign(data_.channels.size(), QPoint(0, 0));
+        update();
+      } else {
+        toggleFftOverlay();
+      }
       break;
     case Qt::Key_Space:
       if (data_.isAudio) {
@@ -175,6 +220,28 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
   if (event->button() != Qt::LeftButton || !workspaceActive_) {
     return QWidget::mousePressEvent(event);
   }
+
+  if (showFftOverlay_) {
+    const QRect plot = plotRect();
+    const int nChannels = static_cast<int>(data_.channels.size());
+    const auto panes = buildFftPaneLayouts(plot, nChannels);
+    for (const auto& pane : panes) {
+      if (pane.leftMargin.contains(event->pos())) {
+        fftMovePending_ = true;
+        fftMoveReady_ = false;
+        fftMoveChannel_ = pane.channel;
+        fftMovePressPos_ = event->pos();
+        if (fftMoveChannel_ >= 0 && fftMoveChannel_ < static_cast<int>(fftPaneOffsets_.size()))
+          fftMoveStartOffset_ = fftPaneOffsets_[static_cast<size_t>(fftMoveChannel_)];
+        else
+          fftMoveStartOffset_ = QPoint(0, 0);
+        fftMoveHoldTimer_.start();
+        event->accept();
+        return;
+      }
+    }
+  }
+
   updateHoverFromPoint(event->pos());
   selecting_ = true;
   selStart_ = xToSample(event->pos());
@@ -183,6 +250,20 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
 }
 
 void SignalGraphWindow::mouseMoveEvent(QMouseEvent* event) {
+  if (fftMovePending_) {
+    if (fftMoveReady_ && (event->buttons() & Qt::LeftButton)) {
+      const QPoint delta = event->pos() - fftMovePressPos_;
+      const QPoint desired = fftMoveStartOffset_ + delta;
+      const QRect plot = plotRect();
+      if (fftMoveChannel_ >= 0 && fftMoveChannel_ < static_cast<int>(fftPaneOffsets_.size())) {
+        fftPaneOffsets_[static_cast<size_t>(fftMoveChannel_)] = clampFftPaneOffset(plot, desired, fftMoveChannel_);
+      }
+      update();
+    }
+    event->accept();
+    return;
+  }
+
   updateHoverFromPoint(event->pos());
   if (!selecting_) {
     update();
@@ -194,6 +275,15 @@ void SignalGraphWindow::mouseMoveEvent(QMouseEvent* event) {
 
 void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
   if (event->button() == Qt::LeftButton) {
+    if (fftMovePending_) {
+      fftMoveHoldTimer_.stop();
+      fftMovePending_ = false;
+      fftMoveReady_ = false;
+      fftMoveChannel_ = -1;
+      update();
+      event->accept();
+      return;
+    }
     updateHoverFromPoint(event->pos());
     selecting_ = false;
     selEnd_ = xToSample(event->pos());
@@ -202,8 +292,10 @@ void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void SignalGraphWindow::leaveEvent(QEvent* event) {
-  hoverActive_ = false;
-  hoverSample_ = -1;
+  if (!fftMovePending_) {
+    hoverActive_ = false;
+    hoverSample_ = -1;
+  }
   update();
   QWidget::leaveEvent(event);
 }
@@ -643,6 +735,29 @@ QRect SignalGraphWindow::plotRect() const {
 }
 
 void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
+  hoverInFft_ = false;
+  hoverFftValue_ = 0.0;
+  hoverFftFreqHz_ = 0.0;
+
+  if (showFftOverlay_ && data_.isAudio && data_.sampleRate > 0) {
+    ensureFftData();
+    const int nChannels = std::min(static_cast<int>(data_.channels.size()), static_cast<int>(fftDb_.size()));
+    const auto panes = buildFftPaneLayouts(plotRect(), nChannels);
+    for (const auto& pane : panes) {
+      if (!pane.inner.contains(pt)) {
+        continue;
+      }
+      const double x01 = std::clamp((pt.x() - pane.inner.left()) / static_cast<double>(std::max(1, pane.inner.width())), 0.0, 1.0);
+      const double y01 = std::clamp((pt.y() - pane.inner.top()) / static_cast<double>(std::max(1, pane.inner.height())), 0.0, 1.0);
+      hoverInFft_ = true;
+      hoverFftValue_ = -80.0 * y01; // top=0 dB, bottom=-80 dB
+      hoverFftFreqHz_ = x01 * (data_.sampleRate * 0.5);
+      hoverActive_ = true;
+      hoverSample_ = -1;
+      return;
+    }
+  }
+
   const QRect plot = plotRect();
   if (!plot.contains(pt) || data_.channels.empty()) {
     hoverActive_ = false;
@@ -717,6 +832,148 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
   return out;
 }
 
+void SignalGraphWindow::toggleFftOverlay() {
+  if (!data_.isAudio || data_.channels.empty() || data_.sampleRate <= 0) {
+    showFftOverlay_ = false;
+    return;
+  }
+  showFftOverlay_ = !showFftOverlay_;
+  if (showFftOverlay_) {
+    ensureFftData();
+  }
+  update();
+}
+
+void SignalGraphWindow::ensureFftData() {
+  const bool stale = !fftComputed_ || fftViewStart_ != viewStart_ || fftViewLen_ != viewLen_ || fftDataSerial_ != dataSerial_;
+  if (!stale) {
+    return;
+  }
+  fftComputed_ = true;
+  fftViewStart_ = viewStart_;
+  fftViewLen_ = viewLen_;
+  fftDataSerial_ = dataSerial_;
+  fftDb_.clear();
+  if (!fftProvider_) {
+    return;
+  }
+  fftDb_ = fftProvider_(viewStart_, viewLen_);
+}
+
+std::vector<SignalGraphWindow::FftPaneLayout> SignalGraphWindow::buildFftPaneLayouts(const QRect& plot, int nChannels) const {
+  std::vector<FftPaneLayout> out;
+  if (nChannels <= 0) {
+    return out;
+  }
+  const int insetW = std::max(140, static_cast<int>(std::llround(plot.width() * 0.20)));
+  const int insetH = std::max(90, static_cast<int>(std::llround(insetW * 0.62)));
+  const int gap = 8;
+  const int rightMargin = 8;
+  const int topMargin = 8;
+
+  for (int ch = 0; ch < nChannels; ++ch) {
+    const QPoint off = (ch >= 0 && ch < static_cast<int>(fftPaneOffsets_.size())) ? fftPaneOffsets_[static_cast<size_t>(ch)] : QPoint(0, 0);
+    const int x = plot.right() - insetW - rightMargin + off.x();
+    const int y = plot.top() + topMargin + ch * (insetH + gap) + off.y();
+    QRect box(x, y, insetW, insetH);
+    QRect inner = box.adjusted(28, 14, -8, -18);
+    QRect leftMargin(box.left(), box.top(), std::max(0, inner.left() - box.left()), box.height());
+    if (inner.width() < 20 || inner.height() < 20) {
+      continue;
+    }
+    out.push_back({ch, box, inner, leftMargin});
+  }
+  return out;
+}
+
+QPoint SignalGraphWindow::clampFftPaneOffset(const QRect& plot, const QPoint& desired, int channelIndex) const {
+  if (channelIndex < 0) {
+    return QPoint(0, 0);
+  }
+  const int insetW = std::max(140, static_cast<int>(std::llround(plot.width() * 0.20)));
+  const int insetH = std::max(90, static_cast<int>(std::llround(insetW * 0.62)));
+  const int gap = 8;
+  const int rightMargin = 8;
+  const int topMargin = 8;
+  const int baseX = plot.right() - insetW - rightMargin;
+  const int baseY = plot.top() + topMargin + channelIndex * (insetH + gap);
+  const int minX = plot.left() - baseX;
+  const int maxX = plot.right() - insetW - baseX;
+  const int minY = plot.top() - baseY;
+  const int maxY = plot.bottom() - insetH - baseY;
+  return QPoint(std::clamp(desired.x(), minX, maxX), std::clamp(desired.y(), minY, maxY));
+}
+
+void SignalGraphWindow::drawFftOverlays(QPainter& p, const QRect& plot) {
+  if (!showFftOverlay_ || !workspaceActive_ || !data_.isAudio || data_.sampleRate <= 0) {
+    return;
+  }
+  ensureFftData();
+  if (fftDb_.empty()) {
+    return;
+  }
+
+  const int nChannels = std::min(static_cast<int>(data_.channels.size()), static_cast<int>(fftDb_.size()));
+  if (nChannels <= 0) {
+    return;
+  }
+
+  const QColor chColors[2] = {QColor(28, 62, 178), QColor(255, 86, 86)};
+  const auto panes = buildFftPaneLayouts(plot, nChannels);
+  for (int ch = 0; ch < static_cast<int>(panes.size()); ++ch) {
+    const QRect box = panes[static_cast<size_t>(ch)].box;
+    const QRect inner = panes[static_cast<size_t>(ch)].inner;
+
+    const bool activePane = fftMoveReady_ && fftMovePending_ && fftMoveChannel_ == panes[static_cast<size_t>(ch)].channel;
+    const QColor paneFill = activePane ? QColor(210, 236, 210, 235) : QColor(238, 238, 228, 230);
+    p.fillRect(box, paneFill);
+    p.setPen(QColor(80, 80, 80));
+    p.drawRect(box);
+
+    p.setPen(QColor(155, 155, 155));
+    for (int t = 0; t <= 4; ++t) {
+      const int yy = inner.top() + (t * inner.height()) / 4;
+      p.drawLine(inner.left(), yy, inner.right(), yy);
+    }
+    for (int t = 0; t <= 2; ++t) {
+      const int xx = inner.left() + (t * inner.width()) / 2;
+      p.drawLine(xx, inner.top(), xx, inner.bottom());
+    }
+
+    const auto& db = fftDb_[static_cast<size_t>(ch)];
+    if (!db.empty()) {
+      QPainterPath path;
+      bool first = true;
+      const int n = static_cast<int>(db.size());
+      for (int i = 0; i < n; ++i) {
+        const double xf = (n <= 1) ? 0.0 : static_cast<double>(i) / (n - 1);
+        const double clampedDb = std::clamp(db[static_cast<size_t>(i)], -80.0, 0.0);
+        const double yf = (0.0 - clampedDb) / 80.0;
+        const double px = inner.left() + xf * inner.width();
+        const double py = inner.top() + yf * inner.height();
+        if (first) {
+          path.moveTo(px, py);
+          first = false;
+        } else {
+          path.lineTo(px, py);
+        }
+      }
+      p.setRenderHint(QPainter::Antialiasing, true);
+      p.setPen(QPen(chColors[ch % 2], 1.3));
+      p.drawPath(path);
+      p.setRenderHint(QPainter::Antialiasing, false);
+    }
+
+    p.setPen(QColor(35, 35, 35));
+    p.drawText(QRect(inner.left() - 24, inner.top() - 6, 22, 12), Qt::AlignRight | Qt::AlignVCenter, "0");
+    p.drawText(QRect(inner.left() - 24, inner.bottom() - 6, 22, 12), Qt::AlignRight | Qt::AlignVCenter, "-80");
+    p.drawText(QRect(inner.left(), inner.bottom() + 2, 40, 12), Qt::AlignLeft | Qt::AlignVCenter, "0");
+    p.drawText(QRect(inner.right() - 56, inner.bottom() + 2, 56, 12), Qt::AlignRight | Qt::AlignVCenter,
+               QString("%1").arg(data_.sampleRate / 2));
+    p.drawText(QRect(inner.left() - 24, inner.bottom() + 10, 48, 12), Qt::AlignLeft | Qt::AlignVCenter, "[Hz]");
+  }
+}
+
 void SignalGraphWindow::drawStatusBar(QPainter& p) const {
   const QRect bar = rect().adjusted(0, rect().height() - 30, 0, 0);
   p.fillRect(bar, QColor(224, 224, 224));
@@ -729,8 +986,10 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
   const Range rmsRange = hasSel ? sel : Range{0, totalTimeline};
 
   const QString mouseText =
-      (hoverActive_ && hoverSample_ >= 0) ? QString("(%1,%2)").arg(formatTimeValue(hoverSample_, false)).arg(hoverValue_, 0, 'f', 3)
-                                          : QString();
+      (hoverActive_ && hoverInFft_)
+          ? QString("(%1, %2 Hz)").arg(hoverFftValue_, 0, 'f', 2).arg(hoverFftFreqHz_, 0, 'f', 1)
+          : ((hoverActive_ && hoverSample_ >= 0) ? QString("(%1,%2)").arg(formatTimeValue(hoverSample_, false)).arg(hoverValue_, 0, 'f', 3)
+                                                 : QString());
   const QString viewStartText = formatTimeValue(viewStart_, true);
   const QString viewEndText = formatTimeValue(viewStart_ + std::max(1, viewLen_) - 1, true);
   const QString selStartText = hasSel ? formatTimeValue(sel.start, true) : QString();
