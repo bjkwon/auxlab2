@@ -195,10 +195,7 @@ void UdfDebugWindow::closeFile(const QString& filePath) {
   tabs_->removeTab(index);
   delete w;
 
-  if (breakpointOwnerFilePath_ == filePath) {
-    breakpoints_.clear();
-    breakpointOwnerFilePath_.clear();
-  }
+  breakpointsByFile_.remove(filePath);
   if (currentFilePath() == filePath) {
     pausedLine_ = -1;
   }
@@ -261,24 +258,26 @@ int UdfDebugWindow::cursorLine() const {
 }
 
 bool UdfDebugWindow::hasBreakpoint(int lineNumber) const {
-  if (currentFilePath() != breakpointOwnerFilePath_) {
+  const auto it = breakpointsByFile_.find(currentFilePath());
+  if (it == breakpointsByFile_.end()) {
     return false;
   }
-  return breakpoints_.contains(lineNumber);
+  return it.value().contains(lineNumber);
 }
 
 void UdfDebugWindow::setBreakpoints(const QSet<int>& lines) {
-  breakpoints_ = lines;
-  breakpointOwnerFilePath_ = currentFilePath();
+  setBreakpointsForFile(currentFilePath(), lines);
+}
+
+void UdfDebugWindow::setBreakpointsForFile(const QString& filePath, const QSet<int>& lines) {
+  if (filePath.isEmpty()) {
+    return;
+  }
+  breakpointsByFile_.insert(filePath, lines);
   refreshSelections();
 }
 
 void UdfDebugWindow::toggleBreakpointAtCursor() {
-  if (!breakpointOwnerFilePath_.isEmpty() && currentFilePath() != breakpointOwnerFilePath_) {
-    statusBar()->showMessage("Breakpoints can only be toggled in the active UDF tab.", 2200);
-    return;
-  }
-
   const int line = cursorLine();
   if (line <= 0) {
     return;
@@ -375,29 +374,27 @@ void UdfDebugWindow::refreshSelections(DebugCodeEditor* editor, const QString& f
     return;
   }
 
-  const bool isBreakpointOwner = (filePath == breakpointOwnerFilePath_);
-  editor->setBreakpointLines(isBreakpointOwner ? breakpoints_ : QSet<int>{});
+  const QSet<int> fileBreakpoints = breakpointsByFile_.value(filePath);
+  editor->setBreakpointLines(fileBreakpoints);
 
   QList<QTextEdit::ExtraSelection> sels;
 
-  if (isBreakpointOwner) {
-    for (int line : breakpoints_) {
-      if (line <= 0) {
-        continue;
-      }
-      QTextCursor c(editor->document());
-      c.movePosition(QTextCursor::Start);
-      for (int i = 1; i < line; ++i) {
-        if (!c.movePosition(QTextCursor::NextBlock)) {
-          break;
-        }
-      }
-      QTextEdit::ExtraSelection sel;
-      sel.cursor = c;
-      sel.format.setBackground(QColor(120, 32, 32, 120));
-      sel.format.setProperty(QTextFormat::FullWidthSelection, true);
-      sels.push_back(sel);
+  for (int line : fileBreakpoints) {
+    if (line <= 0) {
+      continue;
     }
+    QTextCursor c(editor->document());
+    c.movePosition(QTextCursor::Start);
+    for (int i = 1; i < line; ++i) {
+      if (!c.movePosition(QTextCursor::NextBlock)) {
+        break;
+      }
+    }
+    QTextEdit::ExtraSelection sel;
+    sel.cursor = c;
+    sel.format.setBackground(QColor(120, 32, 32, 120));
+    sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+    sels.push_back(sel);
   }
 
   if (pausedLine_ > 0 && filePath == currentFilePath()) {

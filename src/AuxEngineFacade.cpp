@@ -272,10 +272,11 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
     out.output += preview;
   }
 
-  if (out.status == static_cast<int>(auxEvalStatus::AUX_EVAL_PAUSED)) {
+  auxDebugInfo info{};
+  const bool hasPauseInfo = activeCtx_ && aux_debug_get_pause_info(activeCtx_, info) == 0;
+  if (out.status == static_cast<int>(auxEvalStatus::AUX_EVAL_PAUSED) || hasPauseInfo) {
     paused_ = true;
-    auxDebugInfo info{};
-    if (aux_debug_get_pause_info(activeCtx_, info) == 0) {
+    if (hasPauseInfo) {
       pauseInfo_ = info;
       activeCtx_ = info.ctx ? *info.ctx : activeCtx_;
     } else {
@@ -585,8 +586,12 @@ auxContext* AuxEngineFacade::rootContext() const {
 }
 
 std::optional<auxDebugInfo> AuxEngineFacade::pauseInfo() const {
-  if (!paused_) {
+  if (!paused_ || !activeCtx_) {
     return std::nullopt;
+  }
+  auxDebugInfo info{};
+  if (aux_debug_get_pause_info(activeCtx_, info) == 0) {
+    return info;
   }
   return pauseInfo_;
 }

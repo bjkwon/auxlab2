@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
 #include <QSet>
 
 class QLabel;
@@ -22,6 +23,7 @@ public:
   int cursorLine() const;
   bool hasBreakpoint(int lineNumber) const;
   void setBreakpoints(const QSet<int>& lines);
+  void setBreakpointsForFile(const QString& filePath, const QSet<int>& lines);
   void toggleBreakpointAtCursor();
 
 signals:
@@ -48,8 +50,7 @@ private:
   void updateSaveEnabled();
   void updateTabTitle(int index);
 
-  QString breakpointOwnerFilePath_;
-  QSet<int> breakpoints_;
+  QHash<QString, QSet<int>> breakpointsByFile_;
   int pausedLine_ = -1;
 
   QLabel* statusLabel_ = nullptr;

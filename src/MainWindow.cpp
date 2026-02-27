@@ -588,31 +588,44 @@ void MainWindow::closeUdfFile() {
 }
 
 void MainWindow::toggleBreakpointAtCursor() {
-  if (currentUdfName_.isEmpty()) {
+  const QString udfName = activeDebugUdfName();
+  if (udfName.isEmpty()) {
     statusBar()->showMessage("Open a UDF file first.", 2000);
     return;
+  }
+
+  const QString filePath = activeDebugFilePath();
+  if (!filePath.isEmpty()) {
+    const auto bps = engine_.getBreakpoints(udfName.toStdString());
+    QSet<int> qbps;
+    for (int line : bps) {
+      qbps.insert(line);
+    }
+    debugWindow_->setBreakpointsForFile(filePath, qbps);
   }
   toggleDebugWindowVisible(true);
   debugWindow_->toggleBreakpointAtCursor();
 }
 
 void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
-  if (currentUdfName_.isEmpty() || lineNumber <= 0) {
+  const QString udfName = activeDebugUdfName();
+  const QString filePath = activeDebugFilePath();
+  if (udfName.isEmpty() || filePath.isEmpty() || lineNumber <= 0) {
     return;
   }
 
   std::string err;
-  if (!engine_.setBreakpoint(currentUdfName_.toStdString(), lineNumber, enable, err)) {
+  if (!engine_.setBreakpoint(udfName.toStdString(), lineNumber, enable, err)) {
     statusBar()->showMessage(QString::fromStdString(err), 2500);
     return;
   }
 
-  const auto bps = engine_.getBreakpoints(currentUdfName_.toStdString());
+  const auto bps = engine_.getBreakpoints(udfName.toStdString());
   QSet<int> qbps;
   for (int line : bps) {
     qbps.insert(line);
   }
-  debugWindow_->setBreakpoints(qbps);
+  debugWindow_->setBreakpointsForFile(filePath, qbps);
   statusBar()->showMessage(enable ? QString("Breakpoint set at line %1").arg(lineNumber)
                                   : QString("Breakpoint cleared at line %1").arg(lineNumber),
                            1500);
@@ -776,9 +789,37 @@ void MainWindow::refreshDebugView() {
     auto infoOpt = engine_.pauseInfo();
     if (infoOpt) {
       toggleDebugWindowVisible(true);
-      debugWindow_->setPauseLocation(QString::fromStdString(infoOpt->filename), infoOpt->line);
+      const QString pauseFile = QString::fromStdString(infoOpt->filename);
+      const QString pauseUdf = QFileInfo(pauseFile).completeBaseName();
+      debugWindow_->setPauseLocation(pauseFile, infoOpt->line);
+      if (!pauseUdf.isEmpty()) {
+        const auto bps = engine_.getBreakpoints(pauseUdf.toStdString());
+        QSet<int> qbps;
+        for (int line : bps) {
+          qbps.insert(line);
+        }
+        debugWindow_->setBreakpointsForFile(pauseFile, qbps);
+      }
     }
   }
+}
+
+QString MainWindow::activeDebugFilePath() const {
+  if (!debugWindow_) {
+    return {};
+  }
+  return debugWindow_->currentFilePath();
+}
+
+QString MainWindow::activeDebugUdfName() const {
+  const QString filePath = activeDebugFilePath();
+  if (!filePath.isEmpty()) {
+    const QString base = QFileInfo(filePath).completeBaseName();
+    if (!base.isEmpty()) {
+      return base;
+    }
+  }
+  return currentUdfName_;
 }
 
 void MainWindow::addHistory(const QString& cmd) {

@@ -99,6 +99,8 @@ private:
   void savePersistedRuntimeSettings() const;
   void toggleBreakpointAtCursor();
   void setBreakpointAtLine(int lineNumber, bool enable);
+  QString activeDebugUdfName() const;
+  QString activeDebugFilePath() const;
   void showSettingsDialog();
 
   AuxEngineFacade engine_;
