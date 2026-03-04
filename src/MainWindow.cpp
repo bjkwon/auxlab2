@@ -17,6 +17,7 @@
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileSystemWatcher>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -85,6 +86,7 @@ MainWindow::MainWindow() {
   loadRecentUdfFiles();
   buildMenus();
   connectSignals();
+  loadPersistedWindowLayout();
   loadHistory();
   refreshVariables();
   refreshDebugView();
@@ -104,6 +106,7 @@ void MainWindow::buildUi() {
   auto* layout = new QVBoxLayout(central);
 
   auto* splitter = new QSplitter(this);
+  mainSplitter_ = splitter;
 
   commandBox_ = new CommandConsole(this);
 
@@ -112,6 +115,7 @@ void MainWindow::buildUi() {
   variableLayout->setContentsMargins(0, 0, 0, 0);
 
   auto* variableSectionSplitter = new QSplitter(Qt::Vertical, variablePanel);
+  variableSectionSplitter_ = variableSectionSplitter;
 
   auto* audioSection = new QWidget(variableSectionSplitter);
   auto* audioLayout = new QVBoxLayout(audioSection);
@@ -166,6 +170,8 @@ void MainWindow::buildUi() {
   debugWindow_ = new UdfDebugWindow(this);
   debugWindow_->hide();
   debugWindow_->installEventFilter(this);
+
+  udfFileWatcher_ = new QFileSystemWatcher(this);
 }
 
 void MainWindow::buildMenus() {
@@ -174,7 +180,12 @@ void MainWindow::buildMenus() {
   openUdfFileAction_->setShortcut(QKeySequence::Open);
   openUdfFileAction_->setShortcutContext(Qt::ApplicationShortcut);
   openRecentMenu_ = fileMenu->addMenu("Open &Recent");
+  openRecentMenu_->menuAction()->setShortcut(QKeySequence("Ctrl+Shift+R"));
+  openRecentMenu_->menuAction()->setShortcutContext(Qt::ApplicationShortcut);
   updateRecentUdfMenu();
+  openRecentQuickAction_ = fileMenu->addAction("Open Most &Recent");
+  openRecentQuickAction_->setShortcut(QKeySequence("Ctrl+Shift+O"));
+  openRecentQuickAction_->setShortcutContext(Qt::ApplicationShortcut);
   closeUdfFileAction_ = fileMenu->addAction("&Close UDF");
   closeUdfFileAction_->setEnabled(false);
 
@@ -185,8 +196,10 @@ void MainWindow::buildMenus() {
   showDebugWindowAction_->setShortcut(QKeySequence("Ctrl+Alt+D"));
   showDebugWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
   focusDebugWindowAction_ = viewMenu->addAction("Focus &Debug Window");
+  focusDebugWindowAction_->setShortcut(QKeySequence(Qt::Key_F12));
   focusDebugWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
   focusMainWindowAction_ = viewMenu->addAction("Focus &Main Window");
+  focusMainWindowAction_->setShortcut(QKeySequence("Shift+F12"));
   focusMainWindowAction_->setShortcutContext(Qt::ApplicationShortcut);
 
   auto* windowMenu = menuBar()->addMenu("&Window");
@@ -284,6 +297,42 @@ void MainWindow::connectSignals() {
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
 
   connect(openUdfFileAction_, &QAction::triggered, this, &MainWindow::openUdfFile);
+  connect(openRecentQuickAction_, &QAction::triggered, this, [this]() {
+    if (recentUdfFiles_.isEmpty()) {
+      statusBar()->showMessage("No recent UDF files.", 2000);
+      return;
+    }
+    const QString target = recentUdfFiles_.front();
+    if (!QFileInfo::exists(target)) {
+      recentUdfFiles_.removeFirst();
+      updateRecentUdfMenu();
+      statusBar()->showMessage("Most recent UDF file no longer exists.", 2500);
+      return;
+    }
+
+    std::string err;
+    if (!engine_.loadUdfFile(target.toStdString(), err)) {
+      QMessageBox::warning(this, "Open Most Recent UDF", QString::fromStdString(err));
+      return;
+    }
+
+    QFileInfo fi(target);
+    currentUdfFilePath_ = fi.absoluteFilePath();
+    currentUdfName_ = fi.completeBaseName();
+    closeUdfFileAction_->setEnabled(true);
+
+    debugWindow_->setFile(currentUdfFilePath_);
+    const auto bps = engine_.getBreakpoints(currentUdfName_.toStdString());
+    QSet<int> qbps;
+    for (int line : bps) {
+      qbps.insert(line);
+    }
+    debugWindow_->setBreakpoints(qbps);
+    addRecentUdfFile(currentUdfFilePath_);
+    startWatchingCurrentUdf();
+    toggleDebugWindowVisible(true);
+    refreshDebugView();
+  });
   connect(closeUdfFileAction_, &QAction::triggered, this, &MainWindow::closeUdfFile);
   connect(showDebugWindowAction_, &QAction::toggled, this, &MainWindow::toggleDebugWindowVisible);
   connect(focusMainWindowAction_, &QAction::triggered, this, &MainWindow::focusMainWindow);
@@ -335,11 +384,21 @@ void MainWindow::connectSignals() {
     handleDebugAction(auxDebugAction::AUX_DEBUG_ABORT_BASE);
   });
   connect(debugWindow_, &UdfDebugWindow::breakpointToggleRequested, this, &MainWindow::setBreakpointAtLine);
+  connect(udfFileWatcher_, &QFileSystemWatcher::fileChanged, this, [this](const QString& path) {
+    if (!QFileInfo::exists(path)) {
+      return;
+    }
+    if (!udfFileWatcher_->files().contains(path)) {
+      udfFileWatcher_->addPath(path);
+    }
+    reloadCurrentUdfIfStale("File changed on disk", true);
+  });
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
   saveHistory();
   saveRecentUdfFiles();
+  savePersistedWindowLayout();
   savePersistedRuntimeSettings();
   QMainWindow::closeEvent(event);
 }
@@ -402,6 +461,10 @@ void MainWindow::toggleDebugWindowVisible(bool visible) {
     return;
   }
   if (visible) {
+    if (!appliedInitialDebugWindowRect_ && pendingDebugWindowRectValid_ && pendingDebugWindowRect_.isValid()) {
+      debugWindow_->setGeometry(pendingDebugWindowRect_);
+      appliedInitialDebugWindowRect_ = true;
+    }
     debugWindow_->show();
     debugWindow_->raise();
     debugWindow_->activateWindow();
@@ -477,6 +540,111 @@ void MainWindow::savePersistedRuntimeSettings() const {
   settings.setValue("runtime_settings/udf_paths", paths);
 }
 
+void MainWindow::loadPersistedWindowLayout() {
+  QSettings settings("auxlab2", "auxlab2");
+
+  const QByteArray mainGeometry = settings.value("ui/main_geometry").toByteArray();
+  if (!mainGeometry.isEmpty()) {
+    restoreGeometry(mainGeometry);
+  }
+
+  if (mainSplitter_) {
+    const QByteArray splitState = settings.value("ui/main_splitter_state").toByteArray();
+    if (!splitState.isEmpty()) {
+      mainSplitter_->restoreState(splitState);
+    }
+  }
+
+  if (variableSectionSplitter_) {
+    const QByteArray splitState = settings.value("ui/variable_splitter_state").toByteArray();
+    if (!splitState.isEmpty()) {
+      variableSectionSplitter_->restoreState(splitState);
+    }
+  }
+
+  if (debugWindow_) {
+    const QByteArray debugGeometry = settings.value("ui/debug_geometry").toByteArray();
+    if (!debugGeometry.isEmpty()) {
+      debugWindow_->restoreGeometry(debugGeometry);
+    }
+    const QRect debugRect = settings.value("ui/debug_rect").toRect();
+    pendingDebugWindowRect_ = debugRect;
+    pendingDebugWindowRectValid_ = debugRect.isValid();
+    appliedInitialDebugWindowRect_ = false;
+  }
+}
+
+void MainWindow::savePersistedWindowLayout() const {
+  QSettings settings("auxlab2", "auxlab2");
+  settings.setValue("ui/main_geometry", saveGeometry());
+  if (mainSplitter_) {
+    settings.setValue("ui/main_splitter_state", mainSplitter_->saveState());
+  }
+  if (variableSectionSplitter_) {
+    settings.setValue("ui/variable_splitter_state", variableSectionSplitter_->saveState());
+  }
+  if (debugWindow_) {
+    settings.setValue("ui/debug_geometry", debugWindow_->saveGeometry());
+    const QRect rect = debugWindow_->normalGeometry().isValid() ? debugWindow_->normalGeometry() : debugWindow_->geometry();
+    settings.setValue("ui/debug_rect", rect);
+  }
+}
+
+void MainWindow::startWatchingCurrentUdf() {
+  if (!udfFileWatcher_) {
+    return;
+  }
+  const QStringList watched = udfFileWatcher_->files();
+  if (!watched.isEmpty()) {
+    udfFileWatcher_->removePaths(watched);
+  }
+  currentUdfLastModified_ = QDateTime();
+  if (currentUdfFilePath_.isEmpty()) {
+    return;
+  }
+
+  const QFileInfo fi(currentUdfFilePath_);
+  if (!fi.exists()) {
+    return;
+  }
+
+  udfFileWatcher_->addPath(currentUdfFilePath_);
+  currentUdfLastModified_ = fi.lastModified();
+}
+
+bool MainWindow::reloadCurrentUdfIfStale(const QString& reason, bool forceReload) {
+  if (currentUdfFilePath_.isEmpty()) {
+    return false;
+  }
+
+  const QFileInfo fi(currentUdfFilePath_);
+  if (!fi.exists()) {
+    return false;
+  }
+
+  const QDateTime lastModified = fi.lastModified();
+  const bool stale = !currentUdfLastModified_.isValid() || lastModified > currentUdfLastModified_;
+  if (!forceReload && !stale) {
+    return false;
+  }
+
+  std::string err;
+  if (!engine_.loadUdfFile(currentUdfFilePath_.toStdString(), err)) {
+    statusBar()->showMessage(QString("Failed to reload UDF: %1").arg(QString::fromStdString(err)), 3500);
+    return false;
+  }
+
+  currentUdfLastModified_ = lastModified;
+  const auto bps = engine_.getBreakpoints(currentUdfName_.toStdString());
+  QSet<int> qbps;
+  for (int line : bps) {
+    qbps.insert(line);
+  }
+  debugWindow_->setBreakpointsForFile(currentUdfFilePath_, qbps);
+  statusBar()->showMessage(QString("%1 (%2)").arg(fi.fileName(), reason), 1800);
+  return true;
+}
+
 void MainWindow::updateRecentUdfMenu() {
   if (!openRecentMenu_) {
     return;
@@ -542,6 +710,7 @@ void MainWindow::openRecentUdf() {
   }
   debugWindow_->setBreakpoints(qbps);
   addRecentUdfFile(currentUdfFilePath_);
+  startWatchingCurrentUdf();
   toggleDebugWindowVisible(true);
   refreshDebugView();
 }
@@ -571,6 +740,7 @@ void MainWindow::openUdfFile() {
   }
   debugWindow_->setBreakpoints(qbps);
   addRecentUdfFile(currentUdfFilePath_);
+  startWatchingCurrentUdf();
   toggleDebugWindowVisible(true);
   refreshDebugView();
 }
@@ -584,6 +754,7 @@ void MainWindow::closeUdfFile() {
   debugWindow_->setFile(QString());
   debugWindow_->setBreakpoints(QSet<int>{});
   closeUdfFileAction_->setEnabled(false);
+  startWatchingCurrentUdf();
   refreshDebugView();
 }
 
@@ -632,6 +803,7 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 }
 
 void MainWindow::runCommand(const QString& cmd) {
+  reloadCurrentUdfIfStale("Reloaded after external edit");
   const QString actual = cmd;
   if (!actual.trimmed().isEmpty()) {
     addHistory(actual);
@@ -1325,6 +1497,7 @@ bool MainWindow::variableIsBinary(const QString& varName) const {
 }
 
 void MainWindow::handleDebugAction(auxDebugAction action) {
+  reloadCurrentUdfIfStale("Reloaded after external edit");
   engine_.debugResume(action);
   refreshVariables();
   refreshDebugView();

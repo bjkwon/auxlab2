@@ -1,13 +1,17 @@
 #include "UdfDebugWindow.h"
 #include "DebugCodeEditor.h"
 
+#include <QAction>
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPalette>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
@@ -28,6 +32,14 @@ UdfDebugWindow::UdfDebugWindow(QWidget* parent) : QMainWindow(parent) {
   statusLabel_ = new QLabel("Debug state: idle", this);
   locationLabel_ = new QLabel("Location: -", this);
 
+  auto* fileMenu = menuBar()->addMenu("&File");
+  saveAction_ = fileMenu->addAction("&Save");
+  saveAction_->setShortcut(QKeySequence::Save);
+  saveAction_->setShortcutContext(Qt::WindowShortcut);
+  saveAllAction_ = fileMenu->addAction("Save &All");
+  saveAllAction_->setShortcut(QKeySequence("Ctrl+Shift+S"));
+  saveAllAction_->setShortcutContext(Qt::WindowShortcut);
+
   layout->addWidget(statusLabel_);
   layout->addWidget(locationLabel_);
 
@@ -37,15 +49,12 @@ UdfDebugWindow::UdfDebugWindow(QWidget* parent) : QMainWindow(parent) {
   layout->addWidget(tabs_, 1);
 
   auto* buttons = new QHBoxLayout();
-  saveBtn_ = new QPushButton("Save", this);
-  saveBtn_->setShortcut(QKeySequence::Save);
   stepBtn_ = new QPushButton("Step Over", this);
   stepInBtn_ = new QPushButton("Step In", this);
   stepOutBtn_ = new QPushButton("Step Out", this);
   continueBtn_ = new QPushButton("Continue", this);
   abortBtn_ = new QPushButton("Abort", this);
 
-  buttons->addWidget(saveBtn_);
   buttons->addStretch(1);
   buttons->addWidget(stepBtn_);
   buttons->addWidget(stepInBtn_);
@@ -56,8 +65,16 @@ UdfDebugWindow::UdfDebugWindow(QWidget* parent) : QMainWindow(parent) {
 
   setCentralWidget(central);
 
-  connect(saveBtn_, &QPushButton::clicked, this, [this]() {
+  connect(saveAction_, &QAction::triggered, this, [this]() {
     saveTab(tabs_->currentIndex());
+  });
+  connect(saveAllAction_, &QAction::triggered, this, [this]() {
+    for (int i = 0; i < tabs_->count(); ++i) {
+      auto* editor = qobject_cast<DebugCodeEditor*>(tabs_->widget(i));
+      if (editor && editor->document()->isModified()) {
+        saveTab(i);
+      }
+    }
   });
   connect(stepBtn_, &QPushButton::clicked, this, &UdfDebugWindow::debugStepOver);
   connect(stepInBtn_, &QPushButton::clicked, this, &UdfDebugWindow::debugStepIn);
@@ -287,11 +304,6 @@ void UdfDebugWindow::toggleBreakpointAtCursor() {
 }
 
 void UdfDebugWindow::keyPressEvent(QKeyEvent* event) {
-  if (event->matches(QKeySequence::Save)) {
-    saveTab(tabs_->currentIndex());
-    event->accept();
-    return;
-  }
   if (event->key() == Qt::Key_F9) {
     toggleBreakpointAtCursor();
     event->accept();
@@ -376,6 +388,7 @@ void UdfDebugWindow::refreshSelections(DebugCodeEditor* editor, const QString& f
 
   const QSet<int> fileBreakpoints = breakpointsByFile_.value(filePath);
   editor->setBreakpointLines(fileBreakpoints);
+  editor->setPausedLine((pausedLine_ > 0 && filePath == currentFilePath()) ? pausedLine_ : -1);
 
   QList<QTextEdit::ExtraSelection> sels;
 
@@ -397,21 +410,6 @@ void UdfDebugWindow::refreshSelections(DebugCodeEditor* editor, const QString& f
     sels.push_back(sel);
   }
 
-  if (pausedLine_ > 0 && filePath == currentFilePath()) {
-    QTextCursor c(editor->document());
-    c.movePosition(QTextCursor::Start);
-    for (int i = 1; i < pausedLine_; ++i) {
-      if (!c.movePosition(QTextCursor::NextBlock)) {
-        break;
-      }
-    }
-    QTextEdit::ExtraSelection sel;
-    sel.cursor = c;
-    sel.format.setBackground(QColor(210, 180, 60, 120));
-    sel.format.setProperty(QTextFormat::FullWidthSelection, true);
-    sels.push_back(sel);
-  }
-
   editor->setExtraSelections(sels);
 }
 
@@ -424,7 +422,20 @@ void UdfDebugWindow::refreshSelections() {
 
 void UdfDebugWindow::updateSaveEnabled() {
   auto* editor = currentEditor();
-  saveBtn_->setEnabled(editor && editor->document()->isModified());
+  if (saveAction_) {
+    saveAction_->setEnabled(editor && editor->document()->isModified());
+  }
+  if (saveAllAction_) {
+    bool anyModified = false;
+    for (int i = 0; i < tabs_->count(); ++i) {
+      auto* tabEditor = qobject_cast<DebugCodeEditor*>(tabs_->widget(i));
+      if (tabEditor && tabEditor->document()->isModified()) {
+        anyModified = true;
+        break;
+      }
+    }
+    saveAllAction_->setEnabled(anyModified);
+  }
 }
 
 void UdfDebugWindow::updateTabTitle(int index) {
@@ -441,4 +452,10 @@ void UdfDebugWindow::updateTabTitle(int index) {
     title += "*";
   }
   tabs_->setTabText(index, title);
+  if (auto* tabBar = tabs_->tabBar()) {
+    const bool modified = editor && editor->document()->isModified();
+    const QColor normalColor = tabBar->palette().color(QPalette::WindowText);
+    const QColor modifiedColor(230, 140, 28);
+    tabBar->setTabTextColor(index, modified ? modifiedColor : normalColor);
+  }
 }

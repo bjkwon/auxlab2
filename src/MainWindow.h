@@ -5,8 +5,10 @@
 #include <QAudioSink>
 #include <QBuffer>
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QMainWindow>
 #include <QPointer>
+#include <QRect>
 #include <QStringList>
 
 class QListWidget;
@@ -14,6 +16,8 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QAction;
 class QMenu;
+class QSplitter;
+class QFileSystemWatcher;
 class CommandConsole;
 class SignalGraphWindow;
 class SignalTableWindow;
@@ -97,6 +101,10 @@ private:
   void saveRecentUdfFiles() const;
   void loadPersistedRuntimeSettings();
   void savePersistedRuntimeSettings() const;
+  void loadPersistedWindowLayout();
+  void savePersistedWindowLayout() const;
+  void startWatchingCurrentUdf();
+  bool reloadCurrentUdfIfStale(const QString& reason, bool forceReload = false);
   void toggleBreakpointAtCursor();
   void setBreakpointAtLine(int lineNumber, bool enable);
   QString activeDebugUdfName() const;
@@ -114,6 +122,7 @@ private:
   QAction* focusMainWindowAction_ = nullptr;
   QAction* focusDebugWindowAction_ = nullptr;
   QAction* openUdfFileAction_ = nullptr;
+  QAction* openRecentQuickAction_ = nullptr;
   QAction* closeUdfFileAction_ = nullptr;
   QAction* showSettingsAction_ = nullptr;
   QAction* toggleBreakpointAction_ = nullptr;
@@ -123,6 +132,13 @@ private:
   QAction* debugStepOutAction_ = nullptr;
   QAction* debugAbortAction_ = nullptr;
   QMenu* openRecentMenu_ = nullptr;
+  QSplitter* mainSplitter_ = nullptr;
+  QSplitter* variableSectionSplitter_ = nullptr;
+  QFileSystemWatcher* udfFileWatcher_ = nullptr;
+  QDateTime currentUdfLastModified_;
+  QRect pendingDebugWindowRect_;
+  bool pendingDebugWindowRectValid_ = false;
+  bool appliedInitialDebugWindowRect_ = false;
 
   std::vector<ScopedWindow> scopedWindows_;
   mutable QPointer<QWidget> lastFocusedScopedWindow_;

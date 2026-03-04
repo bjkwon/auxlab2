@@ -10,6 +10,7 @@ public:
   int lineNumberAreaWidth() const;
   void lineNumberAreaPaintEvent(QPaintEvent* event);
   void setBreakpointLines(const QSet<int>& lines);
+  void setPausedLine(int lineNumber);
 
 protected:
   void resizeEvent(QResizeEvent* event) override;
@@ -23,4 +24,5 @@ private:
   class LineNumberArea;
   LineNumberArea* lineNumberArea_ = nullptr;
   QSet<int> breakpointLines_;
+  int pausedLine_ = -1;
 };

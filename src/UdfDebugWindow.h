@@ -8,6 +8,7 @@ class QLabel;
 class QPushButton;
 class QKeyEvent;
 class QTabWidget;
+class QAction;
 class DebugCodeEditor;
 
 class UdfDebugWindow : public QMainWindow {
@@ -56,7 +57,8 @@ private:
   QLabel* statusLabel_ = nullptr;
   QLabel* locationLabel_ = nullptr;
   QTabWidget* tabs_ = nullptr;
-  QPushButton* saveBtn_ = nullptr;
+  QAction* saveAction_ = nullptr;
+  QAction* saveAllAction_ = nullptr;
   QPushButton* stepBtn_ = nullptr;
   QPushButton* stepInBtn_ = nullptr;
   QPushButton* stepOutBtn_ = nullptr;

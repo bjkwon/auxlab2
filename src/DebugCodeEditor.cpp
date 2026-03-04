@@ -57,6 +57,10 @@ void DebugCodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event) {
   while (block.isValid() && top <= event->rect().bottom()) {
     if (block.isVisible() && bottom >= event->rect().top()) {
       const int lineNo = blockNumber + 1;
+      if (lineNo == pausedLine_) {
+        painter.fillRect(QRect(kMarkerColumnWidth + 1, top, lineNumberArea_->width() - kMarkerColumnWidth - 1, bottom - top),
+                         QColor(210, 180, 60, 120));
+      }
       if (breakpointLines_.contains(lineNo)) {
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(Qt::NoPen);
@@ -65,7 +69,7 @@ void DebugCodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event) {
         painter.drawEllipse(QPoint(kMarkerColumnWidth / 2, cy), 4, 4);
       }
       const QString number = QString::number(blockNumber + 1);
-      painter.setPen(QColor(150, 155, 170));
+      painter.setPen(lineNo == pausedLine_ ? QColor(35, 35, 35) : QColor(150, 155, 170));
       painter.drawText(kMarkerColumnWidth + 2, top, lineNumberArea_->width() - kMarkerColumnWidth - 6, fontMetrics().height(),
                        Qt::AlignRight, number);
     }
@@ -79,6 +83,13 @@ void DebugCodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event) {
 
 void DebugCodeEditor::setBreakpointLines(const QSet<int>& lines) {
   breakpointLines_ = lines;
+  if (lineNumberArea_) {
+    lineNumberArea_->update();
+  }
+}
+
+void DebugCodeEditor::setPausedLine(int lineNumber) {
+  pausedLine_ = lineNumber > 0 ? lineNumber : -1;
   if (lineNumberArea_) {
     lineNumberArea_->update();
   }
