@@ -101,6 +101,28 @@ set_target_properties(auxlab2 PROPERTIES
   VERSION "${AUXLAB2_VERSION}"
 )
 
+if(APPLE)
+  set_target_properties(auxlab2 PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME "auxlab2"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.auxlab2.app"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${AUXLAB2_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${AUXLAB2_VERSION}"
+  )
+
+  set(AUXLAB2_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab2.icns")
+  if(EXISTS "${AUXLAB2_ICON_FILE}")
+    target_sources(auxlab2 PRIVATE "${AUXLAB2_ICON_FILE}")
+    set_source_files_properties("${AUXLAB2_ICON_FILE}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    set_target_properties(auxlab2 PROPERTIES MACOSX_BUNDLE_ICON_FILE "auxlab2.icns")
+  else()
+    message(WARNING
+      "No app icon found at resources/icons/auxlab2.icns. "
+      "Build will still produce auxlab2.app, but with default icon."
+    )
+  endif()
+endif()
+
 target_include_directories(auxlab2 PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/src
   ${CMAKE_BINARY_DIR}/generated

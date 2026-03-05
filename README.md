@@ -51,6 +51,32 @@ cmake --build /Users/bkwon/dev/auxlab2/build -j
 /Users/bkwon/dev/auxlab2/build/auxlab2
 ```
 
+## App Icon (macOS)
+
+To produce a Finder-launchable `.app` with a custom icon:
+
+1. Prepare a square PNG (recommended `1024x1024`).
+2. Generate the icon file:
+
+```bash
+/Users/bkwon/dev/auxlab2/scripts/make_icns.sh /absolute/path/to/icon-1024.png
+```
+
+This writes:
+
+- `/Users/bkwon/dev/auxlab2/resources/icons/auxlab2.icns`
+
+3. Reconfigure/build:
+
+```bash
+cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build
+cmake --build /Users/bkwon/dev/auxlab2/build -j
+```
+
+4. Launch by double-clicking:
+
+- `/Users/bkwon/dev/auxlab2/build/auxlab2.app`
+
 ## UI Behavior Summary
 
 ### Command Console
