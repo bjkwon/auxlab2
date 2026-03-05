@@ -2,6 +2,7 @@
 
 #include "BinaryObjectWindow.h"
 #include "CommandConsole.h"
+#include "BuildInfo.h"
 #include "SignalGraphWindow.h"
 #include "SignalTableWindow.h"
 #include "TextObjectWindow.h"
@@ -46,6 +47,9 @@
 
 namespace {
 constexpr int kMaxRecentUdfFiles = 8;
+constexpr int kHistoryCommandRole = Qt::UserRole + 1;
+constexpr int kHistoryCountRole = Qt::UserRole + 2;
+constexpr int kHistoryIsCommentRole = Qt::UserRole + 3;
 
 QString historyFilePath() {
   QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -63,6 +67,10 @@ QString truncateDisplayText(const std::string& s, int maxChars = 140) {
     return q;
   }
   return q.left(maxChars - 3) + "...";
+}
+
+QString makeSessionBannerText() {
+  return QString("// %1").arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 }
 
 #ifdef Q_OS_MAC
@@ -90,6 +98,9 @@ MainWindow::MainWindow() {
   loadHistory();
   refreshVariables();
   refreshDebugView();
+  statusBar()->showMessage(
+      QString("%1 v%2 (%3)").arg(AUXLAB2_APP_NAME).arg(AUXLAB2_VERSION).arg(AUXLAB2_GIT_HASH),
+      5000);
 }
 
 MainWindow::~MainWindow() {
@@ -99,7 +110,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::buildUi() {
-  setWindowTitle("auxlab2");
+  setWindowTitle(QString("%1 v%2").arg(AUXLAB2_APP_NAME).arg(AUXLAB2_VERSION));
   resize(1200, 760);
 
   auto* central = new QWidget(this);
@@ -123,11 +134,13 @@ void MainWindow::buildUi() {
   audioLayout->addWidget(new QLabel("Audio Objects", audioSection));
   audioVariableBox_ = new QTreeWidget(audioSection);
   audioVariableBox_->setColumnCount(4);
-  audioVariableBox_->setHeaderLabels({"Name", "dbRMS", "Size", "Signal Intervals (ms)"});
-  audioVariableBox_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-  audioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-  audioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  audioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  audioVariableBox_->setHeaderLabels({"Name", "dBRMS", "Size", "Signal Intervals (ms)"});
+  audioVariableBox_->header()->setSectionResizeMode(QHeaderView::Interactive);
+  audioVariableBox_->header()->setStretchLastSection(false);
+  audioVariableBox_->setColumnWidth(0, 180);
+  audioVariableBox_->setColumnWidth(1, 90);
+  audioVariableBox_->setColumnWidth(2, 120);
+  audioVariableBox_->setColumnWidth(3, 360);
   audioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   audioVariableBox_->installEventFilter(this);
   audioLayout->addWidget(audioVariableBox_);
@@ -139,10 +152,12 @@ void MainWindow::buildUi() {
   nonAudioVariableBox_ = new QTreeWidget(nonAudioSection);
   nonAudioVariableBox_->setColumnCount(4);
   nonAudioVariableBox_->setHeaderLabels({"Name", "Type", "Size", "Content"});
-  nonAudioVariableBox_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-  nonAudioVariableBox_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-  nonAudioVariableBox_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  nonAudioVariableBox_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  nonAudioVariableBox_->header()->setSectionResizeMode(QHeaderView::Interactive);
+  nonAudioVariableBox_->header()->setStretchLastSection(false);
+  nonAudioVariableBox_->setColumnWidth(0, 180);
+  nonAudioVariableBox_->setColumnWidth(1, 90);
+  nonAudioVariableBox_->setColumnWidth(2, 120);
+  nonAudioVariableBox_->setColumnWidth(3, 360);
   nonAudioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   nonAudioVariableBox_->installEventFilter(this);
   nonAudioLayout->addWidget(nonAudioVariableBox_);
@@ -151,6 +166,7 @@ void MainWindow::buildUi() {
   variableSectionSplitter->addWidget(nonAudioSection);
   variableSectionSplitter->setStretchFactor(0, 1);
   variableSectionSplitter->setStretchFactor(1, 1);
+  variableSectionSplitter->setChildrenCollapsible(false);
   variableLayout->addWidget(variableSectionSplitter);
 
   historyBox_ = new QListWidget(this);
@@ -265,6 +281,9 @@ void MainWindow::buildMenus() {
   auto* settingsMenu = menuBar()->addMenu("&Settings");
   showSettingsAction_ = settingsMenu->addAction("View Runtime &Settings");
 
+  auto* helpMenu = menuBar()->addMenu("&Help");
+  showAboutAction_ = helpMenu->addAction("&About auxlab2");
+
   auto* debugMenu = menuBar()->addMenu("&Debug");
   toggleBreakpointAction_ = debugMenu->addAction("Toggle &Breakpoint");
   toggleBreakpointAction_->setShortcut(QKeySequence(Qt::Key_F9));
@@ -338,6 +357,7 @@ void MainWindow::connectSignals() {
   connect(focusMainWindowAction_, &QAction::triggered, this, &MainWindow::focusMainWindow);
   connect(focusDebugWindowAction_, &QAction::triggered, this, &MainWindow::focusDebugWindow);
   connect(showSettingsAction_, &QAction::triggered, this, &MainWindow::showSettingsDialog);
+  connect(showAboutAction_, &QAction::triggered, this, &MainWindow::showAboutDialog);
   connect(toggleBreakpointAction_, &QAction::triggered, this, &MainWindow::toggleBreakpointAtCursor);
   connect(debugContinueAction_, &QAction::triggered, this, [this]() {
     handleDebugAction(auxDebugAction::AUX_DEBUG_CONTINUE);
@@ -359,7 +379,11 @@ void MainWindow::connectSignals() {
     if (!item) {
       return;
     }
-    injectCommandFromHistory(item->text(), true);
+    const QString cmd = historyItemCommand(item);
+    if (cmd.isEmpty()) {
+      return;
+    }
+    injectCommandFromHistory(cmd, true);
   });
 
   auto variableDoubleClick = [this](QTreeWidgetItem*, int) {
@@ -423,7 +447,10 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
       auto* item = historyBox_->currentItem();
       if (item) {
-        injectCommandFromHistory(item->text(), false);
+        const QString cmd = historyItemCommand(item);
+        if (!cmd.isEmpty()) {
+          injectCommandFromHistory(cmd, false);
+        }
       }
       return true;
     }
@@ -562,6 +589,24 @@ void MainWindow::loadPersistedWindowLayout() {
     }
   }
 
+  if (audioVariableBox_) {
+    for (int col = 0; col < audioVariableBox_->columnCount(); ++col) {
+      const QString key = QString("ui/audio_column_width_%1").arg(col);
+      if (settings.contains(key)) {
+        audioVariableBox_->setColumnWidth(col, settings.value(key).toInt());
+      }
+    }
+  }
+
+  if (nonAudioVariableBox_) {
+    for (int col = 0; col < nonAudioVariableBox_->columnCount(); ++col) {
+      const QString key = QString("ui/non_audio_column_width_%1").arg(col);
+      if (settings.contains(key)) {
+        nonAudioVariableBox_->setColumnWidth(col, settings.value(key).toInt());
+      }
+    }
+  }
+
   if (debugWindow_) {
     const QByteArray debugGeometry = settings.value("ui/debug_geometry").toByteArray();
     if (!debugGeometry.isEmpty()) {
@@ -582,6 +627,16 @@ void MainWindow::savePersistedWindowLayout() const {
   }
   if (variableSectionSplitter_) {
     settings.setValue("ui/variable_splitter_state", variableSectionSplitter_->saveState());
+  }
+  if (audioVariableBox_) {
+    for (int col = 0; col < audioVariableBox_->columnCount(); ++col) {
+      settings.setValue(QString("ui/audio_column_width_%1").arg(col), audioVariableBox_->columnWidth(col));
+    }
+  }
+  if (nonAudioVariableBox_) {
+    for (int col = 0; col < nonAudioVariableBox_->columnCount(); ++col) {
+      settings.setValue(QString("ui/non_audio_column_width_%1").arg(col), nonAudioVariableBox_->columnWidth(col));
+    }
   }
   if (debugWindow_) {
     settings.setValue("ui/debug_geometry", debugWindow_->saveGeometry());
@@ -998,22 +1053,155 @@ void MainWindow::addHistory(const QString& cmd) {
   if (cmd.trimmed().isEmpty()) {
     return;
   }
-  historyBox_->addItem(cmd);
+
+  for (int i = 0; i < historyBox_->count(); ++i) {
+    auto* item = historyBox_->item(i);
+    if (!item || isHistoryCommentItem(item)) {
+      continue;
+    }
+    if (historyItemCommand(item) == cmd) {
+      int count = item->data(kHistoryCountRole).toInt();
+      if (count <= 0) {
+        count = 1;
+      }
+      item->setData(kHistoryCountRole, count + 1);
+      updateHistoryItemDisplay(item);
+      historyBox_->setCurrentItem(item);
+      historyBox_->scrollToItem(item);
+      return;
+    }
+  }
+
+  auto* item = new QListWidgetItem(historyBox_);
+  item->setData(kHistoryCommandRole, cmd);
+  item->setData(kHistoryCountRole, 1);
+  item->setData(kHistoryIsCommentRole, false);
+  updateHistoryItemDisplay(item);
+  historyBox_->setCurrentItem(item);
+  historyBox_->scrollToBottom();
+}
+
+void MainWindow::addHistoryComment(const QString& text) {
+  if (text.trimmed().isEmpty()) {
+    return;
+  }
+  auto* item = new QListWidgetItem(historyBox_);
+  item->setData(kHistoryCommandRole, QString());
+  item->setData(kHistoryCountRole, 0);
+  item->setData(kHistoryIsCommentRole, true);
+  item->setText(text);
+}
+
+void MainWindow::updateHistoryItemDisplay(QListWidgetItem* item) const {
+  if (!item) {
+    return;
+  }
+  if (isHistoryCommentItem(item)) {
+    return;
+  }
+
+  const QString cmd = historyItemCommand(item);
+  int count = item->data(kHistoryCountRole).toInt();
+  if (count <= 0) {
+    count = 1;
+    item->setData(kHistoryCountRole, count);
+  }
+
+  QString display = cmd;
+  if (count > 1) {
+    display += QString("   (%1x)").arg(count);
+  }
+  item->setText(display);
+  item->setToolTip(display);
+}
+
+bool MainWindow::isHistoryCommentItem(const QListWidgetItem* item) const {
+  if (!item) {
+    return false;
+  }
+  if (item->data(kHistoryIsCommentRole).isValid()) {
+    return item->data(kHistoryIsCommentRole).toBool();
+  }
+  return item->text().trimmed().startsWith("//");
+}
+
+QString MainWindow::historyItemCommand(const QListWidgetItem* item) const {
+  if (!item || isHistoryCommentItem(item)) {
+    return {};
+  }
+  if (item->data(kHistoryCommandRole).isValid()) {
+    return item->data(kHistoryCommandRole).toString();
+  }
+  return item->text();
+}
+
+QVector<int> MainWindow::historyCommandRows() const {
+  QVector<int> rows;
+  rows.reserve(historyBox_->count());
+  for (int i = 0; i < historyBox_->count(); ++i) {
+    const auto* item = historyBox_->item(i);
+    if (!item || isHistoryCommentItem(item)) {
+      continue;
+    }
+    if (historyItemCommand(item).trimmed().isEmpty()) {
+      continue;
+    }
+    rows.push_back(i);
+  }
+  return rows;
+}
+
+void MainWindow::addHistorySessionBanner() {
+  addHistoryComment(makeSessionBannerText());
   historyBox_->scrollToBottom();
 }
 
 void MainWindow::loadHistory() {
   QFile f(historyFilePath());
   if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    addHistorySessionBanner();
     return;
   }
   QTextStream in(&f);
   while (!in.atEnd()) {
     const QString line = in.readLine();
-    if (!line.trimmed().isEmpty()) {
-      historyBox_->addItem(line);
+    if (line.startsWith("#H\t")) {
+      const QString payload = line.mid(3);
+      const int tabPos = payload.indexOf('\t');
+      if (tabPos <= 0) {
+        continue;
+      }
+      bool ok = false;
+      const int count = payload.left(tabPos).toInt(&ok);
+      const QString cmd = payload.mid(tabPos + 1);
+      if (!ok || cmd.trimmed().isEmpty()) {
+        continue;
+      }
+      auto* item = new QListWidgetItem(historyBox_);
+      item->setData(kHistoryCommandRole, cmd);
+      item->setData(kHistoryCountRole, std::max(1, count));
+      item->setData(kHistoryIsCommentRole, false);
+      updateHistoryItemDisplay(item);
+      continue;
     }
+    if (line.startsWith("#C\t")) {
+      addHistoryComment(line.mid(3));
+      continue;
+    }
+    if (line.trimmed().isEmpty()) {
+      continue;
+    }
+    if (line.trimmed().startsWith("//")) {
+      addHistoryComment(line);
+      continue;
+    }
+    auto* item = new QListWidgetItem(historyBox_);
+    item->setData(kHistoryCommandRole, line);
+    item->setData(kHistoryCountRole, 1);
+    item->setData(kHistoryIsCommentRole, false);
+    updateHistoryItemDisplay(item);
   }
+  addHistorySessionBanner();
   historyBox_->scrollToBottom();
 }
 
@@ -1026,7 +1214,19 @@ void MainWindow::saveHistory() const {
   for (int i = 0; i < historyBox_->count(); ++i) {
     const QListWidgetItem* item = historyBox_->item(i);
     if (item) {
-      out << item->text() << '\n';
+      if (isHistoryCommentItem(item)) {
+        out << "#C\t" << item->text() << '\n';
+      } else {
+        const QString cmd = historyItemCommand(item);
+        if (cmd.trimmed().isEmpty()) {
+          continue;
+        }
+        int count = item->data(kHistoryCountRole).toInt();
+        if (count <= 0) {
+          count = 1;
+        }
+        out << "#H\t" << count << '\t' << cmd << '\n';
+      }
     }
   }
 }
@@ -1045,7 +1245,8 @@ void MainWindow::injectCommandFromHistory(const QString& cmd, bool execute) {
 }
 
 void MainWindow::navigateHistoryFromCommand(int delta) {
-  const int n = historyBox_->count();
+  const QVector<int> commandRows = historyCommandRows();
+  const int n = commandRows.size();
   if (n <= 0 || delta == 0) {
     return;
   }
@@ -1070,24 +1271,26 @@ void MainWindow::navigateHistoryFromCommand(int delta) {
   }
 
   historyNavIndex_ = next;
-  auto* item = historyBox_->item(historyNavIndex_);
+  const int row = commandRows[historyNavIndex_];
+  auto* item = historyBox_->item(row);
   if (!item) {
     return;
   }
-  historyBox_->setCurrentRow(historyNavIndex_);
-  commandBox_->setCurrentCommand(item->text());
+  historyBox_->setCurrentRow(row);
+  commandBox_->setCurrentCommand(historyItemCommand(item));
 }
 
 void MainWindow::reverseSearchFromCommand() {
-  const int n = historyBox_->count();
+  const QVector<int> commandRows = historyCommandRows();
+  const int n = commandRows.size();
   if (n <= 0) {
     return;
   }
 
   const QString currentInput = commandBox_->currentCommand().trimmed();
   if (reverseSearchActive_ && reverseSearchIndex_ >= 0 && reverseSearchIndex_ < n) {
-    auto* curItem = historyBox_->item(reverseSearchIndex_);
-    if (curItem && curItem->text() != commandBox_->currentCommand()) {
+    auto* curItem = historyBox_->item(commandRows[reverseSearchIndex_]);
+    if (curItem && historyItemCommand(curItem) != commandBox_->currentCommand()) {
       reverseSearchActive_ = false;
       reverseSearchTerm_.clear();
       reverseSearchIndex_ = -1;
@@ -1102,11 +1305,12 @@ void MainWindow::reverseSearchFromCommand() {
 
   int found = -1;
   for (int i = reverseSearchIndex_ - 1; i >= 0; --i) {
-    auto* item = historyBox_->item(i);
+    auto* item = historyBox_->item(commandRows[i]);
     if (!item) {
       continue;
     }
-    if (reverseSearchTerm_.isEmpty() || item->text().contains(reverseSearchTerm_, Qt::CaseInsensitive)) {
+    const QString cmd = historyItemCommand(item);
+    if (reverseSearchTerm_.isEmpty() || cmd.contains(reverseSearchTerm_, Qt::CaseInsensitive)) {
       found = i;
       break;
     }
@@ -1119,8 +1323,9 @@ void MainWindow::reverseSearchFromCommand() {
 
   reverseSearchIndex_ = found;
   historyNavIndex_ = found;
-  historyBox_->setCurrentRow(found);
-  const QString match = historyBox_->item(found)->text();
+  const int row = commandRows[found];
+  historyBox_->setCurrentRow(row);
+  const QString match = historyItemCommand(historyBox_->item(row));
   commandBox_->setCurrentCommand(match);
   statusBar()->showMessage(QString("reverse-i-search \"%1\": %2").arg(reverseSearchTerm_, match), 2500);
 }
@@ -1591,4 +1796,20 @@ void MainWindow::showSettingsDialog() {
 
   savePersistedRuntimeSettings();
   statusBar()->showMessage("Runtime settings updated.", 2500);
+}
+
+void MainWindow::showAboutDialog() {
+  QString auxeVersion = QString::fromStdString(engine_.engineVersion());
+  if (auxeVersion.trimmed().isEmpty()) {
+    auxeVersion = AUXE_VERSION;
+  }
+  const QString aboutText =
+      QString("%1\nVersion: %2\nCommit: %3\nBuild time: %4\n\nauxe\nVersion: %5\nCommit: %6")
+          .arg(AUXLAB2_APP_NAME)
+          .arg(AUXLAB2_VERSION)
+          .arg(AUXLAB2_GIT_HASH)
+          .arg(AUXLAB2_BUILD_DATETIME)
+          .arg(auxeVersion)
+          .arg(AUXE_GIT_HASH);
+  QMessageBox::about(this, "About auxlab2", aboutText);
 }

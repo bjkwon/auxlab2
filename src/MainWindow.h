@@ -10,8 +10,10 @@
 #include <QPointer>
 #include <QRect>
 #include <QStringList>
+#include <QVector>
 
 class QListWidget;
+class QListWidgetItem;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QAction;
@@ -61,6 +63,12 @@ private:
   void refreshDebugView();
 
   void addHistory(const QString& cmd);
+  void addHistoryComment(const QString& text);
+  void updateHistoryItemDisplay(QListWidgetItem* item) const;
+  bool isHistoryCommentItem(const QListWidgetItem* item) const;
+  QString historyItemCommand(const QListWidgetItem* item) const;
+  QVector<int> historyCommandRows() const;
+  void addHistorySessionBanner();
   void injectCommandFromHistory(const QString& cmd, bool execute);
   void loadHistory();
   void saveHistory() const;
@@ -110,6 +118,7 @@ private:
   QString activeDebugUdfName() const;
   QString activeDebugFilePath() const;
   void showSettingsDialog();
+  void showAboutDialog();
 
   AuxEngineFacade engine_;
 
@@ -125,6 +134,7 @@ private:
   QAction* openRecentQuickAction_ = nullptr;
   QAction* closeUdfFileAction_ = nullptr;
   QAction* showSettingsAction_ = nullptr;
+  QAction* showAboutAction_ = nullptr;
   QAction* toggleBreakpointAction_ = nullptr;
   QAction* debugContinueAction_ = nullptr;
   QAction* debugStepOverAction_ = nullptr;

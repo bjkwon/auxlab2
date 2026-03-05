@@ -573,6 +573,14 @@ bool AuxEngineFacade::deleteVar(const std::string& varName) {
   return aux_del_var(activeCtx_, varName) == 0;
 }
 
+std::string AuxEngineFacade::engineVersion() const {
+  auxContext* ctx = activeCtx_ ? activeCtx_ : rootCtx_;
+  if (!ctx) {
+    return {};
+  }
+  return aux_version(ctx);
+}
+
 bool AuxEngineFacade::isPaused() const {
   return paused_;
 }

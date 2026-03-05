@@ -67,6 +67,7 @@ public:
   std::set<int> getBreakpoints(const std::string& udfName) const;
 
   bool deleteVar(const std::string& varName);
+  std::string engineVersion() const;
 
   bool isPaused() const;
   auxContext* activeContext() const;
