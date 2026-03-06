@@ -289,16 +289,34 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
   return out;
 }
 
+int AuxEngineFacade::pollAsync() {
+  if (!activeCtx_ && !rootCtx_) {
+    return 0;
+  }
+  int changed = 0;
+  if (activeCtx_) {
+    changed += aux_poll_async(activeCtx_);
+  }
+  if (rootCtx_ && rootCtx_ != activeCtx_) {
+    changed += aux_poll_async(rootCtx_);
+  }
+  return changed;
+}
+
 std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
   std::vector<VarSnapshot> vars;
-  if (!activeCtx_) {
+  auxContext* ctx = paused_ ? activeCtx_ : rootCtx_;
+  if (!ctx) {
+    ctx = activeCtx_;
+  }
+  if (!ctx) {
     return vars;
   }
 
-  auto names = aux_enum_vars(activeCtx_);
+  auto names = aux_enum_vars(ctx);
   vars.reserve(names.size());
   for (const auto& name : names) {
-    auto obj = aux_get_var(activeCtx_, name);
+    auto obj = aux_get_var(ctx, name);
     if (!obj) {
       continue;
     }
@@ -309,7 +327,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
     snap.channels = aux_num_channels(obj);
     snap.type = aux_type(obj);
     snap.typeTag = shortTypeTag(snap.type);
-    aux_describe_var(activeCtx_, obj, cfg_, snap.type, snap.size, snap.preview);
+    aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
     if (snap.typeTag == "SCLR") {
       snap.preview = scalarOnlyPreview(snap.preview);
     }

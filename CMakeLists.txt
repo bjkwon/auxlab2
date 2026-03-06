@@ -121,6 +121,14 @@ if(APPLE)
       "Build will still produce auxlab2.app, but with default icon."
     )
   endif()
+
+  # Keep a top-level launcher in the build dir aligned with the real bundle executable.
+  # This avoids stale ./build/auxlab2 pointing at an older binary.
+  add_custom_command(TARGET auxlab2 POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_BINARY_DIR}/auxlab2"
+    COMMAND "${CMAKE_COMMAND}" -E create_symlink "$<TARGET_FILE:auxlab2>" "${CMAKE_BINARY_DIR}/auxlab2"
+    VERBATIM
+  )
 endif()
 
 target_include_directories(auxlab2 PRIVATE

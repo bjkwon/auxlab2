@@ -54,6 +54,7 @@ public:
 
   bool init();
   EvalResult eval(const std::string& command);
+  int pollAsync();
 
   std::vector<VarSnapshot> listVariables() const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;

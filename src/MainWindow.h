@@ -10,6 +10,7 @@
 #include <QPointer>
 #include <QRect>
 #include <QStringList>
+#include <QTimer>
 #include <QVector>
 
 class QListWidget;
@@ -55,6 +56,7 @@ private:
   void connectSignals();
 
   void runCommand(const QString& cmd);
+  void onAsyncPollTick();
   void updateCommandPrompt();
   QString selectedVarName() const;
   QStringList selectedVarNames(QTreeWidget* box) const;
@@ -167,4 +169,5 @@ private:
   QString currentUdfFilePath_;
   QString currentUdfName_;
   QStringList recentUdfFiles_;
+  QTimer* asyncPollTimer_ = nullptr;
 };

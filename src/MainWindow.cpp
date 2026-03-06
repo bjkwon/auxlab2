@@ -98,6 +98,10 @@ MainWindow::MainWindow() {
   loadHistory();
   refreshVariables();
   refreshDebugView();
+  asyncPollTimer_ = new QTimer(this);
+  asyncPollTimer_->setInterval(300);
+  connect(asyncPollTimer_, &QTimer::timeout, this, &MainWindow::onAsyncPollTick);
+  asyncPollTimer_->start();
   statusBar()->showMessage(
       QString("%1 v%2 (%3)").arg(AUXLAB2_APP_NAME).arg(AUXLAB2_VERSION).arg(AUXLAB2_GIT_HASH),
       5000);
@@ -889,6 +893,15 @@ void MainWindow::runCommand(const QString& cmd) {
 
   refreshVariables();
   refreshDebugView();
+  reconcileScopedWindows();
+}
+
+void MainWindow::onAsyncPollTick() {
+  const int changed = engine_.pollAsync();
+  if (changed <= 0) {
+    return;
+  }
+  refreshVariables();
   reconcileScopedWindows();
 }
 
