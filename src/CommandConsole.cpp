@@ -2,6 +2,7 @@
 
 #include <QEvent>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -33,6 +34,9 @@ bool CommandConsole::event(QEvent* event) {
         case Qt::Key_P:
         case Qt::Key_N:
         case Qt::Key_R:
+        case Qt::Key_C:
+        case Qt::Key_V:
+        case Qt::Key_X:
           event->accept();
           return true;
         default:
@@ -108,6 +112,17 @@ void CommandConsole::appendExecutionResult(const QString& output) {
 void CommandConsole::keyPressEvent(QKeyEvent* event) {
   const int key = event->key();
   const auto mods = event->modifiers();
+
+  if (event->matches(QKeySequence::Copy)) {
+    QTextCursor c = textCursor();
+    if (!c.hasSelection()) {
+      c.select(QTextCursor::LineUnderCursor);
+      setTextCursor(c);
+    }
+    copy();
+    event->accept();
+    return;
+  }
 
   if ((key == Qt::Key_Return || key == Qt::Key_Enter) && !(mods & Qt::ShiftModifier)) {
     emit commandSubmitted(currentCommand());

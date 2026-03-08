@@ -1,10 +1,12 @@
 #include "MainWindow.h"
 
 #include "BinaryObjectWindow.h"
+#include "CellMembersWindow.h"
 #include "CommandConsole.h"
 #include "BuildInfo.h"
 #include "SignalGraphWindow.h"
 #include "SignalTableWindow.h"
+#include "StructMembersWindow.h"
 #include "TextObjectWindow.h"
 #include "UdfDebugWindow.h"
 
@@ -29,6 +31,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QSpinBox>
@@ -863,7 +866,20 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 
 void MainWindow::runCommand(const QString& cmd) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
-  const QString actual = cmd;
+  QString actual = cmd;
+  const QString trimmedForRewrite = actual.trimmed();
+  static const QRegularExpression kDotAssignPattern(
+      R"(^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*=)");
+  const QRegularExpressionMatch dotAssignMatch = kDotAssignPattern.match(trimmedForRewrite);
+  if (dotAssignMatch.hasMatch()) {
+    const QString rootName = dotAssignMatch.captured(1);
+    if (!rootName.isEmpty() && variableIsCell(rootName)) {
+      engine_.deleteVar(rootName.toStdString());
+      refreshVariables();
+      reconcileScopedWindows();
+    }
+  }
+
   if (!actual.trimmed().isEmpty()) {
     addHistory(actual);
     auto result = engine_.eval(actual.toStdString());
@@ -1067,22 +1083,22 @@ void MainWindow::addHistory(const QString& cmd) {
     return;
   }
 
-  for (int i = 0; i < historyBox_->count(); ++i) {
-    auto* item = historyBox_->item(i);
-    if (!item || isHistoryCommentItem(item)) {
+  for (int i = historyBox_->count() - 1; i >= 0; --i) {
+    auto* latestItem = historyBox_->item(i);
+    if (!latestItem || isHistoryCommentItem(latestItem)) {
       continue;
     }
-    if (historyItemCommand(item) == cmd) {
-      int count = item->data(kHistoryCountRole).toInt();
+    if (historyItemCommand(latestItem) == cmd) {
+      int count = latestItem->data(kHistoryCountRole).toInt();
       if (count <= 0) {
         count = 1;
       }
-      item->setData(kHistoryCountRole, count + 1);
-      updateHistoryItemDisplay(item);
-      historyBox_->setCurrentItem(item);
-      historyBox_->scrollToItem(item);
-      return;
+      latestItem->setData(kHistoryCountRole, count + 1);
+      updateHistoryItemDisplay(latestItem);
+      historyBox_->setCurrentItem(latestItem);
+      historyBox_->scrollToItem(latestItem);
     }
+    return;
   }
 
   auto* item = new QListWidgetItem(historyBox_);
@@ -1345,27 +1361,7 @@ void MainWindow::reverseSearchFromCommand() {
 
 void MainWindow::openSignalGraphForSelected() {
   const QString var = selectedVarName();
-  if (var.isEmpty() || !variableSupportsSignalDisplay(var)) {
-    return;
-  }
-  auto sig = engine_.getSignalData(var.toStdString());
-  if (!sig) {
-    return;
-  }
-
-  const auto currentScope = engine_.activeContext();
-  if (auto* existing = findSignalGraphWindow(var, currentScope)) {
-    existing->updateData(*sig);
-    focusWindow(existing);
-    return;
-  }
-
-  auto* w = new SignalGraphWindow(
-      var, *sig, nullptr,
-      [this, var](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(var.toStdString(), viewStart, viewLen); });
-  w->setAttribute(Qt::WA_DeleteOnClose, true);
-  trackWindow(var, w, WindowKind::Graph);
-  focusWindow(w);
+  openSignalGraphForPath(var);
 }
 
 void MainWindow::focusSignalGraphForSelected() {
@@ -1385,24 +1381,66 @@ void MainWindow::focusSignalGraphForSelected() {
 
 void MainWindow::openSignalTableForSelected() {
   const QString var = selectedVarName();
-  if (var.isEmpty()) {
+  openPathDetail(var);
+}
+
+void MainWindow::playSelectedAudioFromVarBox() {
+  const QString var = selectedVarName();
+  playAudioForPath(var);
+}
+
+void MainWindow::openSignalGraphForPath(const QString& path) {
+  if (path.isEmpty() || !variableSupportsSignalDisplay(path)) {
+    return;
+  }
+  auto sig = engine_.getSignalData(path.toStdString());
+  if (!sig) {
     return;
   }
 
-  if (variableIsString(var)) {
-    auto text = engine_.getStringValue(var.toStdString());
+  const auto currentScope = engine_.activeContext();
+  if (auto* existing = findSignalGraphWindow(path, currentScope)) {
+    existing->updateData(*sig);
+    focusWindow(existing);
+    return;
+  }
+
+  auto* w = new SignalGraphWindow(
+      path, *sig, nullptr,
+      [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  trackWindow(path, w, WindowKind::Graph);
+  focusWindow(w);
+}
+
+void MainWindow::openPathDetail(const QString& path) {
+  if (path.isEmpty()) {
+    return;
+  }
+
+  if (variableIsStruct(path)) {
+    openStructMembersForPath(path);
+    return;
+  }
+  if (variableIsCell(path)) {
+    openCellMembersForPath(path);
+    return;
+  }
+
+  if (variableIsString(path)) {
+    auto text = engine_.getStringValue(path.toStdString());
     if (!text) {
       return;
     }
-    auto* w = new TextObjectWindow(var, QString::fromStdString(*text));
+    auto* w = new TextObjectWindow(path, QString::fromStdString(*text));
     w->setAttribute(Qt::WA_DeleteOnClose, true);
-    trackWindow(var, w, WindowKind::Text);
+    trackWindow(path, w, WindowKind::Text);
     w->show();
     return;
   }
 
-  if (variableIsBinary(var)) {
-    auto binary = engine_.getBinaryData(var.toStdString());
+  if (variableIsBinary(path)) {
+    auto binary = engine_.getBinaryData(path.toStdString());
     if (!binary) {
       return;
     }
@@ -1413,35 +1451,34 @@ void MainWindow::openSignalTableForSelected() {
       std::memcpy(data.data(), binary->bytes.data(), binary->bytes.size());
     }
 
-    auto* w = new BinaryObjectWindow(var, data);
+    auto* w = new BinaryObjectWindow(path, data);
     w->setAttribute(Qt::WA_DeleteOnClose, true);
-    trackWindow(var, w, WindowKind::Text);
+    trackWindow(path, w, WindowKind::Text);
     w->show();
     return;
   }
 
-  if (!variableSupportsSignalDisplay(var)) {
+  if (!variableSupportsSignalDisplay(path)) {
     return;
   }
 
-  auto sig = engine_.getSignalData(var.toStdString());
+  auto sig = engine_.getSignalData(path.toStdString());
   if (!sig) {
     return;
   }
 
-  auto* w = new SignalTableWindow(var, *sig);
+  auto* w = new SignalTableWindow(path, *sig);
   w->setAttribute(Qt::WA_DeleteOnClose, true);
-  trackWindow(var, w, WindowKind::Table);
+  trackWindow(path, w, WindowKind::Table);
   w->show();
 }
 
-void MainWindow::playSelectedAudioFromVarBox() {
-  const QString var = selectedVarName();
-  if (var.isEmpty() || !variableIsAudio(var)) {
+void MainWindow::playAudioForPath(const QString& path) {
+  if (path.isEmpty() || !variableIsAudio(path)) {
     return;
   }
 
-  auto sig = engine_.getSignalData(var.toStdString());
+  auto sig = engine_.getSignalData(path.toStdString());
   if (!sig || !sig->isAudio || sig->channels.empty()) {
     return;
   }
@@ -1498,6 +1535,44 @@ void MainWindow::playSelectedAudioFromVarBox() {
 
   varAudioSink_ = new QAudioSink(fmt, this);
   varAudioSink_->start(varAudioBuffer_);
+}
+
+void MainWindow::openStructMembersForPath(const QString& path) {
+  if (path.isEmpty()) {
+    return;
+  }
+
+  const auto members = engine_.listStructMembers(path.toStdString());
+  if (members.empty()) {
+    return;
+  }
+
+  auto* w = new StructMembersWindow(path, members);
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  connect(w, &StructMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
+  connect(w, &StructMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
+  connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+  trackWindow(path, w, WindowKind::Text);
+  w->show();
+}
+
+void MainWindow::openCellMembersForPath(const QString& path) {
+  if (path.isEmpty()) {
+    return;
+  }
+
+  const auto members = engine_.listCellMembers(path.toStdString());
+  if (members.empty()) {
+    return;
+  }
+
+  auto* w = new CellMembersWindow(path, members);
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  connect(w, &CellMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
+  connect(w, &CellMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
+  connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+  trackWindow(path, w, WindowKind::Text);
+  w->show();
 }
 
 void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind kind) {
@@ -1560,7 +1635,14 @@ void MainWindow::reconcileScopedWindows() {
     }
 
     // Close windows for variables removed from their own scope.
-    if (it->scope == currentScope && activeNames.find(it->varName.toStdString()) == activeNames.end()) {
+    const std::string fullName = it->varName.toStdString();
+    size_t rootPos = fullName.find('.');
+    const size_t cellPos = fullName.find('{');
+    if (cellPos != std::string::npos && (rootPos == std::string::npos || cellPos < rootPos)) {
+      rootPos = cellPos;
+    }
+    const std::string rootName = rootPos == std::string::npos ? fullName : fullName.substr(0, rootPos);
+    if (it->scope == currentScope && activeNames.find(rootName) == activeNames.end()) {
       if (it->window) {
         it->window->close();
       }
@@ -1712,6 +1794,14 @@ bool MainWindow::variableIsString(const QString& varName) const {
 
 bool MainWindow::variableIsBinary(const QString& varName) const {
   return engine_.isBinaryVar(varName.toStdString());
+}
+
+bool MainWindow::variableIsStruct(const QString& varName) const {
+  return engine_.isStructVar(varName.toStdString());
+}
+
+bool MainWindow::variableIsCell(const QString& varName) const {
+  return engine_.isCellVar(varName.toStdString());
 }
 
 void MainWindow::handleDebugAction(auxDebugAction action) {

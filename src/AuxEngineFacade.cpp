@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <atomic>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <iomanip>
@@ -76,6 +78,148 @@ std::string shortTypeTag(uint16_t type) {
 
 bool isTextType(uint16_t type) {
   return (type & 0xFFF0) == kTypeString;
+}
+
+bool isCompositePath(const std::string& path) {
+  return path.find('.') != std::string::npos || path.find('{') != std::string::npos;
+}
+
+bool isIdent(const std::string& s) {
+  if (s.empty()) {
+    return false;
+  }
+  const unsigned char c0 = static_cast<unsigned char>(s.front());
+  if (!(std::isalpha(c0) || c0 == '_')) {
+    return false;
+  }
+  for (size_t i = 1; i < s.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (!(std::isalnum(c) || c == '_')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string makeTempPathName() {
+  static std::atomic<unsigned long long> counter{0};
+  const unsigned long long id = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+  return "__auxlab2_tmp_path__" + std::to_string(id);
+}
+
+class ScopedPathBinding {
+public:
+  ScopedPathBinding() = default;
+  ~ScopedPathBinding() { cleanup(); }
+
+  ScopedPathBinding(const ScopedPathBinding&) = delete;
+  ScopedPathBinding& operator=(const ScopedPathBinding&) = delete;
+
+  bool bind(auxContext*& ctx, const std::string& path, const auxConfig& cfg) {
+    cleanup();
+    if (!ctx || path.empty()) {
+      return false;
+    }
+    ctx_ = ctx;
+    if (!isCompositePath(path)) {
+      pathName_ = path;
+      obj_ = aux_get_var(ctx_, pathName_);
+      return obj_ != nullptr;
+    }
+
+    tmpName_ = makeTempPathName();
+    std::string preview;
+    if (aux_eval(&ctx, tmpName_ + "=" + path, cfg, preview) != 0) {
+      ctx_ = ctx;
+      tmpName_.clear();
+      return false;
+    }
+    ctx_ = ctx;
+    pathName_ = tmpName_;
+    obj_ = aux_get_var(ctx_, pathName_);
+    if (!obj_) {
+      cleanup();
+      return false;
+    }
+    return true;
+  }
+
+  bool bindDirect(auxContext*& ctx, AuxObj obj) {
+    cleanup();
+    ctx_ = ctx;
+    obj_ = obj;
+    return obj_ != nullptr;
+  }
+
+  AuxObj obj() const { return obj_; }
+  const std::string& pathName() const { return pathName_; }
+
+private:
+  void cleanup() {
+    if (ctx_ && !tmpName_.empty()) {
+      aux_del_var(ctx_, tmpName_);
+    }
+    obj_ = nullptr;
+    pathName_.clear();
+    tmpName_.clear();
+    ctx_ = nullptr;
+  }
+
+  auxContext* ctx_ = nullptr;
+  AuxObj obj_ = nullptr;
+  std::string pathName_;
+  std::string tmpName_;
+};
+
+AuxObj resolveObjByPath(auxContext*& ctx, const std::string& path, const auxConfig& cfg, ScopedPathBinding& binding) {
+  const auto dot = path.find('.');
+  const auto brace = path.find('{');
+
+  // Direct one-level struct-member resolution: root.member
+  if (dot != std::string::npos && brace == std::string::npos) {
+    const std::string root = path.substr(0, dot);
+    const std::string member = path.substr(dot + 1);
+    if (isIdent(root) && isIdent(member) && path.find('.', dot + 1) == std::string::npos) {
+      auto members = aux_get_struct(ctx, root);
+      auto it = members.find(member);
+      if (it != members.end() && binding.bindDirect(ctx, it->second)) {
+        return it->second;
+      }
+    }
+  }
+
+  // Direct one-level cell-member resolution: root{N}
+  if (brace != std::string::npos && dot == std::string::npos) {
+    const std::string root = path.substr(0, brace);
+    if (isIdent(root) && path.back() == '}') {
+      const size_t close = path.find('}', brace + 1);
+      if (close == path.size() - 1) {
+        const std::string idxText = path.substr(brace + 1, close - brace - 1);
+        bool digits = !idxText.empty();
+        for (char ch : idxText) {
+          if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            digits = false;
+            break;
+          }
+        }
+        if (digits) {
+          const size_t oneBased = static_cast<size_t>(std::stoul(idxText));
+          if (oneBased > 0) {
+            auto cells = aux_get_cell(ctx, root);
+            const size_t idx = oneBased - 1;
+            if (idx < cells.size() && binding.bindDirect(ctx, cells[idx])) {
+              return cells[idx];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (!binding.bind(ctx, path, cfg)) {
+    return nullptr;
+  }
+  return binding.obj();
 }
 
 std::string formatRmsDb(const AuxObj& obj) {
@@ -339,12 +483,93 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
   return vars;
 }
 
+std::vector<VarSnapshot> AuxEngineFacade::listStructMembers(const std::string& path) const {
+  std::vector<VarSnapshot> out;
+  auxContext* ctx = paused_ ? activeCtx_ : rootCtx_;
+  if (!ctx) {
+    ctx = activeCtx_;
+  }
+  if (!ctx || path.empty()) {
+    return out;
+  }
+
+  ScopedPathBinding binding;
+  if (!binding.bind(ctx, path, cfg_)) {
+    return out;
+  }
+
+  std::map<std::string, AuxObj> members = aux_get_struct(ctx, binding.pathName());
+  out.reserve(members.size());
+  for (const auto& kv : members) {
+    if (!kv.second) {
+      continue;
+    }
+    VarSnapshot snap;
+    snap.name = kv.first;
+    snap.type = aux_type(kv.second);
+    snap.typeTag = shortTypeTag(snap.type);
+    snap.isAudio = aux_is_audio(kv.second);
+    snap.channels = aux_num_channels(kv.second);
+    aux_describe_var(ctx, kv.second, cfg_, snap.type, snap.size, snap.preview);
+    if (snap.typeTag == "SCLR") {
+      snap.preview = scalarOnlyPreview(snap.preview);
+    }
+    if (snap.isAudio) {
+      snap.rms = formatRmsDb(kv.second);
+    }
+    out.push_back(std::move(snap));
+  }
+  return out;
+}
+
+std::vector<VarSnapshot> AuxEngineFacade::listCellMembers(const std::string& path) const {
+  std::vector<VarSnapshot> out;
+  auxContext* ctx = paused_ ? activeCtx_ : rootCtx_;
+  if (!ctx) {
+    ctx = activeCtx_;
+  }
+  if (!ctx || path.empty()) {
+    return out;
+  }
+
+  ScopedPathBinding binding;
+  if (!binding.bind(ctx, path, cfg_)) {
+    return out;
+  }
+
+  std::vector<AuxObj> cells = aux_get_cell(ctx, binding.pathName());
+  out.reserve(cells.size());
+  for (size_t i = 0; i < cells.size(); ++i) {
+    const AuxObj& obj = cells[i];
+    if (!obj) {
+      continue;
+    }
+    VarSnapshot snap;
+    snap.name = std::to_string(i + 1);
+    snap.type = aux_type(obj);
+    snap.typeTag = shortTypeTag(snap.type);
+    snap.isAudio = aux_is_audio(obj);
+    snap.channels = aux_num_channels(obj);
+    aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
+    if (snap.typeTag == "SCLR") {
+      snap.preview = scalarOnlyPreview(snap.preview);
+    }
+    if (snap.isAudio) {
+      snap.rms = formatRmsDb(obj);
+    }
+    out.push_back(std::move(snap));
+  }
+  return out;
+}
+
 std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varName) const {
-  if (!activeCtx_) {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
     return std::nullopt;
   }
 
-  auto obj = aux_get_var(activeCtx_, varName);
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return std::nullopt;
   }
@@ -356,7 +581,7 @@ std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varN
 
   SignalData data;
   data.isAudio = aux_is_audio(obj);
-  data.sampleRate = aux_get_fs(activeCtx_);
+  data.sampleRate = aux_get_fs(ctx);
   double minStartMs = std::numeric_limits<double>::infinity();
 
   data.channels.reserve(static_cast<size_t>(channels));
@@ -395,7 +620,9 @@ std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std:
     return out;
   }
 
-  auto obj = aux_get_var(activeCtx_, varName);
+  auxContext* ctx = activeCtx_;
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return out;
   }
@@ -405,7 +632,7 @@ std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std:
     return out;
   }
 
-  int sampleRate = aux_get_fs(activeCtx_);
+  int sampleRate = aux_get_fs(ctx);
   if (sampleRate <= 0) sampleRate = 1;
   int offsetSamples = 0;
   const auto sig = getSignalData(varName);
@@ -427,21 +654,52 @@ std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std:
 }
 
 bool AuxEngineFacade::isStringVar(const std::string& varName) const {
-  if (!activeCtx_) {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
     return false;
   }
-  auto obj = aux_get_var(activeCtx_, varName);
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return false;
   }
   return isTextType(aux_type(obj));
 }
 
-bool AuxEngineFacade::isBinaryVar(const std::string& varName) const {
-  if (!activeCtx_) {
+bool AuxEngineFacade::isStructVar(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx || varName.empty()) {
     return false;
   }
-  auto obj = aux_get_var(activeCtx_, varName);
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return false;
+  }
+  const uint16_t type = aux_type(obj);
+  return (type & (kTypeStrut | kTypeStruts)) != 0;
+}
+
+bool AuxEngineFacade::isCellVar(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx || varName.empty()) {
+    return false;
+  }
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return false;
+  }
+  return (aux_type(obj) & kTypeCell) != 0;
+}
+
+bool AuxEngineFacade::isBinaryVar(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return false;
+  }
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return false;
   }
@@ -449,10 +707,12 @@ bool AuxEngineFacade::isBinaryVar(const std::string& varName) const {
 }
 
 std::optional<std::string> AuxEngineFacade::getStringValue(const std::string& varName) const {
-  if (!activeCtx_) {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
     return std::nullopt;
   }
-  auto obj = aux_get_var(activeCtx_, varName);
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return std::nullopt;
   }
@@ -468,15 +728,17 @@ std::optional<std::string> AuxEngineFacade::getStringValue(const std::string& va
 
   std::string size;
   std::string preview;
-  aux_describe_var(activeCtx_, obj, cfg, type, size, preview);
+  aux_describe_var(ctx, obj, cfg, type, size, preview);
   return preview;
 }
 
 std::optional<BinaryData> AuxEngineFacade::getBinaryData(const std::string& varName) const {
-  if (!activeCtx_) {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
     return std::nullopt;
   }
-  auto obj = aux_get_var(activeCtx_, varName);
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
     return std::nullopt;
   }

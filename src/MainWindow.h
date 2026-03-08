@@ -24,6 +24,8 @@ class QFileSystemWatcher;
 class CommandConsole;
 class SignalGraphWindow;
 class SignalTableWindow;
+class StructMembersWindow;
+class CellMembersWindow;
 class TextObjectWindow;
 class UdfDebugWindow;
 
@@ -81,6 +83,11 @@ private:
   void focusSignalGraphForSelected();
   void openSignalTableForSelected();
   void playSelectedAudioFromVarBox();
+  void openSignalGraphForPath(const QString& path);
+  void openPathDetail(const QString& path);
+  void playAudioForPath(const QString& path);
+  void openStructMembersForPath(const QString& path);
+  void openCellMembersForPath(const QString& path);
 
   void trackWindow(const QString& varName, QWidget* window, WindowKind kind);
   SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
@@ -97,6 +104,8 @@ private:
   bool variableIsAudio(const QString& varName) const;
   bool variableIsString(const QString& varName) const;
   bool variableIsBinary(const QString& varName) const;
+  bool variableIsStruct(const QString& varName) const;
+  bool variableIsCell(const QString& varName) const;
 
   void handleDebugAction(auxDebugAction action);
   void toggleDebugWindowVisible(bool visible);

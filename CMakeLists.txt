@@ -89,6 +89,10 @@ add_executable(auxlab2
   src/DebugCodeEditor.cpp
   src/SignalTableWindow.h
   src/SignalTableWindow.cpp
+  src/StructMembersWindow.h
+  src/StructMembersWindow.cpp
+  src/CellMembersWindow.h
+  src/CellMembersWindow.cpp
   src/TextObjectWindow.h
   src/TextObjectWindow.cpp
   src/BinaryObjectWindow.h
@@ -110,14 +114,23 @@ if(APPLE)
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${AUXLAB2_VERSION}"
   )
 
-  set(AUXLAB2_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab2.icns")
-  if(EXISTS "${AUXLAB2_ICON_FILE}")
-    target_sources(auxlab2 PRIVATE "${AUXLAB2_ICON_FILE}")
-    set_source_files_properties("${AUXLAB2_ICON_FILE}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+  set(AUXLAB2_ICON_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab2.icns")
+  set(AUXLAB2_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.png")
+  if(EXISTS "${AUXLAB2_ICON_ICNS}")
+    target_sources(auxlab2 PRIVATE "${AUXLAB2_ICON_ICNS}")
+    set_source_files_properties("${AUXLAB2_ICON_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
     set_target_properties(auxlab2 PROPERTIES MACOSX_BUNDLE_ICON_FILE "auxlab2.icns")
+  elseif(EXISTS "${AUXLAB2_ICON_PNG}")
+    target_sources(auxlab2 PRIVATE "${AUXLAB2_ICON_PNG}")
+    set_source_files_properties("${AUXLAB2_ICON_PNG}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    set_target_properties(auxlab2 PROPERTIES MACOSX_BUNDLE_ICON_FILE "auxlab-icon.png")
+    message(WARNING
+      "Using resources/icons/auxlab-icon.png as bundle icon. "
+      "If Finder still shows default icon, generate resources/icons/auxlab2.icns."
+    )
   else()
     message(WARNING
-      "No app icon found at resources/icons/auxlab2.icns. "
+      "No app icon found at resources/icons/auxlab2.icns or resources/icons/auxlab-icon.png. "
       "Build will still produce auxlab2.app, but with default icon."
     )
   endif()

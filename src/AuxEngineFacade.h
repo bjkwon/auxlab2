@@ -57,11 +57,15 @@ public:
   int pollAsync();
 
   std::vector<VarSnapshot> listVariables() const;
+  std::vector<VarSnapshot> listStructMembers(const std::string& path) const;
+  std::vector<VarSnapshot> listCellMembers(const std::string& path) const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
   std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;
   std::optional<BinaryData> getBinaryData(const std::string& varName) const;
   bool isBinaryVar(const std::string& varName) const;
   bool isStringVar(const std::string& varName) const;
+  bool isStructVar(const std::string& varName) const;
+  bool isCellVar(const std::string& varName) const;
   std::optional<std::string> getStringValue(const std::string& varName) const;
   bool loadUdfFile(const std::string& fullPath, std::string& err);
   bool setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err);
