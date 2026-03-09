@@ -63,6 +63,12 @@ if(APPLE)
 endif()
 
 find_package(Qt6 QUIET COMPONENTS Widgets Multimedia)
+if(WIN32)
+   if(DEFINE_QT_ROOT)
+      list(APPEND CMAKE_PREFIX_PATH "${QT_ROOT}")
+   endif()
+endif()
+
 if(NOT Qt6_FOUND)
   message(FATAL_ERROR
     "Qt6 (Widgets, Multimedia) not found.\n"
@@ -75,7 +81,9 @@ endif()
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../aux_engine ${CMAKE_BINARY_DIR}/auxe_build)
 
-add_executable(auxlab2
+option(AUXLAB2_WIN32_GUI "Build Windows GUI subsystem app (no console)" ON)
+
+set(AUXLAB2_SOURCES
   src/main.cpp
   src/AuxEngineFacade.h
   src/AuxEngineFacade.cpp
@@ -100,6 +108,12 @@ add_executable(auxlab2
   src/UdfDebugWindow.h
   src/UdfDebugWindow.cpp
 )
+
+if(WIN32 AND AUXLAB2_WIN32_GUI)
+    add_executable(auxlab2 WIN32 ${AUXLAB2_SOURCES})
+else()
+    add_executable(auxlab2 ${AUXLAB2_SOURCES})
+endif()
 
 set_target_properties(auxlab2 PROPERTIES
   VERSION "${AUXLAB2_VERSION}"
@@ -155,6 +169,10 @@ target_link_libraries(auxlab2 PRIVATE
   auxe
 )
 
-if(MSVC)
-  target_compile_definitions(auxlab2 PRIVATE _HAS_STD_BYTE=0)
-endif()
+install(TARGETS auxlab2
+  RUNTIME DESTINATION bin
+)
+
+install(FILES $<TARGET_FILE:auxe>
+  DESTINATION bin
+)
