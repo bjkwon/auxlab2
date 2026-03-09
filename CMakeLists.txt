@@ -170,6 +170,7 @@ target_link_libraries(auxlab2 PRIVATE
 )
 
 install(TARGETS auxlab2
+  BUNDLE DESTINATION .
   RUNTIME DESTINATION bin
 )
 
