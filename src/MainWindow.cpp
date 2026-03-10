@@ -211,6 +211,9 @@ void MainWindow::buildMenus() {
   openRecentQuickAction_->setShortcutContext(Qt::ApplicationShortcut);
   closeUdfFileAction_ = fileMenu->addAction("&Close UDF");
   closeUdfFileAction_->setEnabled(false);
+  fileMenu->addSeparator();
+  auto* exportHistoryAction = fileMenu->addAction("Export &History as Plain Text...");
+  connect(exportHistoryAction, &QAction::triggered, this, &MainWindow::exportHistoryAsPlainText);
 
   auto* viewMenu = menuBar()->addMenu("&View");
   showDebugWindowAction_ = viewMenu->addAction("Show &Debug Window");
@@ -1097,8 +1100,9 @@ void MainWindow::addHistory(const QString& cmd) {
       updateHistoryItemDisplay(latestItem);
       historyBox_->setCurrentItem(latestItem);
       historyBox_->scrollToItem(latestItem);
+      return;
     }
-    return;
+    break;
   }
 
   auto* item = new QListWidgetItem(historyBox_);
@@ -1258,6 +1262,59 @@ void MainWindow::saveHistory() const {
       }
     }
   }
+}
+
+void MainWindow::exportHistoryAsPlainText() {
+  const QString defaultName =
+      QString("auxlab2-history-%1.txt").arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
+  QString baseDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+  if (baseDir.isEmpty()) {
+    baseDir = QDir::homePath();
+  }
+  const QString suggestedPath = QDir(baseDir).filePath(defaultName);
+  const QString targetPath = QFileDialog::getSaveFileName(
+      this,
+      "Export History as Plain Text",
+      suggestedPath,
+      "Text Files (*.txt);;All Files (*)");
+  if (targetPath.isEmpty()) {
+    return;
+  }
+
+  QFile outFile(targetPath);
+  if (!outFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+    QMessageBox::warning(this, "Export History", QString("Failed to write file:\n%1").arg(targetPath));
+    return;
+  }
+
+  QTextStream out(&outFile);
+  for (int i = 0; i < historyBox_->count(); ++i) {
+    const QListWidgetItem* item = historyBox_->item(i);
+    if (!item) {
+      continue;
+    }
+
+    if (isHistoryCommentItem(item)) {
+      out << item->text() << '\n';
+      continue;
+    }
+
+    const QString cmd = historyItemCommand(item);
+    if (cmd.trimmed().isEmpty()) {
+      continue;
+    }
+
+    int count = item->data(kHistoryCountRole).toInt();
+    if (count <= 0) {
+      count = 1;
+    }
+    for (int repeat = 0; repeat < count; ++repeat) {
+      out << cmd << '\n';
+    }
+  }
+
+  outFile.close();
+  statusBar()->showMessage(QString("History exported to %1").arg(targetPath), 4000);
 }
 
 void MainWindow::injectCommandFromHistory(const QString& cmd, bool execute) {

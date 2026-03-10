@@ -76,6 +76,7 @@ private:
   void injectCommandFromHistory(const QString& cmd, bool execute);
   void loadHistory();
   void saveHistory() const;
+  void exportHistoryAsPlainText();
   void navigateHistoryFromCommand(int delta);
   void reverseSearchFromCommand();
 
