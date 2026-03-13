@@ -63,6 +63,7 @@ private:
   QString selectedVarName() const;
   QStringList selectedVarNames(QTreeWidget* box) const;
   void deleteVariablesFromBox(QTreeWidget* box);
+  void showVariableContextMenu(QTreeWidget* box, const QPoint& pos);
   void refreshVariables();
   void refreshDebugView();
 

@@ -76,6 +76,14 @@ QString makeSessionBannerText() {
   return QString("// %1").arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 }
 
+QString variableDeleteShortcutText() {
+#ifdef Q_OS_MAC
+  return QStringLiteral("Cmd+Delete");
+#else
+  return QStringLiteral("Delete");
+#endif
+}
+
 #ifdef Q_OS_MAC
 constexpr Qt::KeyboardModifier kPrimaryWindowModifier = Qt::MetaModifier;
 #else
@@ -149,6 +157,7 @@ void MainWindow::buildUi() {
   audioVariableBox_->setColumnWidth(2, 120);
   audioVariableBox_->setColumnWidth(3, 360);
   audioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  audioVariableBox_->setContextMenuPolicy(Qt::CustomContextMenu);
   audioVariableBox_->installEventFilter(this);
   audioLayout->addWidget(audioVariableBox_);
 
@@ -166,6 +175,7 @@ void MainWindow::buildUi() {
   nonAudioVariableBox_->setColumnWidth(2, 120);
   nonAudioVariableBox_->setColumnWidth(3, 360);
   nonAudioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  nonAudioVariableBox_->setContextMenuPolicy(Qt::CustomContextMenu);
   nonAudioVariableBox_->installEventFilter(this);
   nonAudioLayout->addWidget(nonAudioVariableBox_);
 
@@ -324,6 +334,12 @@ void MainWindow::connectSignals() {
   connect(commandBox_, &CommandConsole::commandSubmitted, this, &MainWindow::runCommand);
   connect(commandBox_, &CommandConsole::historyNavigateRequested, this, &MainWindow::navigateHistoryFromCommand);
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
+  connect(audioVariableBox_, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+    showVariableContextMenu(audioVariableBox_, pos);
+  });
+  connect(nonAudioVariableBox_, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+    showVariableContextMenu(nonAudioVariableBox_, pos);
+  });
 
   connect(openUdfFileAction_, &QAction::triggered, this, &MainWindow::openUdfFile);
   connect(openRecentQuickAction_, &QAction::triggered, this, [this]() {
@@ -469,7 +485,14 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   if ((watched == audioVariableBox_ || watched == nonAudioVariableBox_) && event->type() == QEvent::KeyPress) {
     auto* ke = static_cast<QKeyEvent*>(event);
     auto* box = qobject_cast<QTreeWidget*>(watched);
-    if (ke->key() == Qt::Key_Delete && (ke->modifiers() & Qt::ShiftModifier) && box) {
+    const bool deleteShortcut =
+#ifdef Q_OS_MAC
+        (ke->modifiers() & Qt::MetaModifier) &&
+        (ke->key() == Qt::Key_Backspace || ke->key() == Qt::Key_Delete);
+#else
+        ke->key() == Qt::Key_Delete && ke->modifiers() == Qt::NoModifier;
+#endif
+    if (deleteShortcut && box) {
       deleteVariablesFromBox(box);
       return true;
     }
@@ -999,6 +1022,27 @@ void MainWindow::deleteVariablesFromBox(QTreeWidget* box) {
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();
+}
+
+void MainWindow::showVariableContextMenu(QTreeWidget* box, const QPoint& pos) {
+  if (!box) {
+    return;
+  }
+
+  if (auto* item = box->itemAt(pos); item && !item->isSelected()) {
+    box->setCurrentItem(item);
+    item->setSelected(true);
+  }
+
+  QMenu menu(this);
+  const QString actionText = QString("Delete Variable(s)\t%1").arg(variableDeleteShortcutText());
+  auto* deleteAction = menu.addAction(actionText);
+  deleteAction->setEnabled(!selectedVarNames(box).isEmpty());
+
+  const QAction* chosen = menu.exec(box->viewport()->mapToGlobal(pos));
+  if (chosen == deleteAction) {
+    deleteVariablesFromBox(box);
+  }
 }
 
 void MainWindow::refreshVariables() {
