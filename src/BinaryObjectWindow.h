@@ -2,7 +2,6 @@
 
 #include <QWidget>
 
-class QLabel;
 class QPlainTextEdit;
 
 class BinaryObjectWindow : public QWidget {
@@ -13,8 +12,20 @@ public:
 
 private:
   static QString combinedDump(const QByteArray& data);
+  static QString rawTextFromBytes(const QByteArray& data);
+  static int countRenderedLines(const QString& text);
+  static QString lineNumberText(int lineCount);
+  void setHexView();
+  void setRawTextView();
+  void toggleViewMode();
+  void toggleRawWrap();
 
   QString varName_;
-  QLabel* nameLabel_ = nullptr;
+  QByteArray data_;
+  QString rawText_;
+  int rawLineCount_ = 0;
+  bool rawTextMode_ = false;
+  bool rawWrapEnabled_ = false;
+  QPlainTextEdit* lineNumberView_ = nullptr;
   QPlainTextEdit* dumpView_ = nullptr;
 };
