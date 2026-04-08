@@ -40,6 +40,11 @@ public:
   std::uint64_t currentGraphicsFigureId() const;
   std::uint64_t currentGraphicsAxesId() const;
   std::uint64_t createGraphicsFigure(std::string& err);
+  std::uint64_t createGraphicsFigureFromHandle(std::uint64_t handleId, std::string& err);
+  std::uint64_t createGraphicsFigureAtPos(const std::array<double, 4>& pos, std::string& err);
+  std::uint64_t createGraphicsNamedFigure(const std::string& sourcePath, std::string& err);
+  std::uint64_t createGraphicsPlot(std::uint64_t targetHandleId, AuxObj obj, const std::string& sourceExpr, const std::string& styleText, std::string& err);
+  std::uint64_t createGraphicsLine(std::uint64_t targetHandleId, AuxObj xObj, AuxObj yObj, std::string& err);
   std::uint64_t createGraphicsAxes(std::string& err);
   std::uint64_t createGraphicsAxesFromHandle(std::uint64_t handleId, std::string& err);
   std::uint64_t createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err);

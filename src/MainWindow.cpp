@@ -48,6 +48,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <unordered_set>
 
 namespace {
@@ -98,6 +99,69 @@ QKeySequence primaryWindowShortcut(Qt::Key key, Qt::KeyboardModifiers extra = Qt
 
 QString graphicsHandleText(std::uint64_t id) {
   return id == 0 ? QStringLiteral("[]") : QString::number(id);
+}
+
+std::optional<SignalData> signalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
+  if (!obj) {
+    return std::nullopt;
+  }
+
+  const int channels = aux_num_channels(obj);
+  if (channels <= 0) {
+    return std::nullopt;
+  }
+
+  SignalData data;
+  data.isAudio = aux_is_audio(obj);
+  data.sampleRate = defaultSampleRate;
+  double minStartMs = std::numeric_limits<double>::infinity();
+
+  data.channels.reserve(static_cast<size_t>(channels));
+  for (int ch = 0; ch < channels; ++ch) {
+    AuxSignal seg{};
+    if (aux_get_segment(obj, ch, 0, seg)) {
+      minStartMs = std::min(minStartMs, seg.tmark);
+      if (data.sampleRate <= 0 && seg.fs > 0) {
+        data.sampleRate = seg.fs;
+      }
+    }
+
+    const auto len = aux_flatten_channel_length(obj, ch);
+    if (len == 0) {
+      continue;
+    }
+
+    ChannelData channel;
+    channel.samples.resize(len);
+    aux_flatten_channel(obj, ch, channel.samples.data(), channel.samples.size());
+    data.channels.push_back(std::move(channel));
+  }
+
+  if (data.channels.empty()) {
+    return std::nullopt;
+  }
+  if (data.isAudio && std::isfinite(minStartMs)) {
+    data.startTimeSec = minStartMs / 1000.0;
+  }
+  return data;
+}
+
+std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
+  if (!obj) {
+    return std::nullopt;
+  }
+  if (aux_num_channels(obj) != 1 || aux_is_audio(obj)) {
+    return std::nullopt;
+  }
+  const size_t len = aux_flatten_channel_length(obj, 0);
+  if (len == 0) {
+    return std::nullopt;
+  }
+  QVector<double> values(static_cast<qsizetype>(len));
+  if (aux_flatten_channel(obj, 0, values.data(), len) != len) {
+    return std::nullopt;
+  }
+  return values;
 }
 
 QString nextGraphicsTempName() {
@@ -424,6 +488,72 @@ std::uint64_t auxlab2CreateFigure(void* userdata, std::string& errstr) {
   return window->createGraphicsFigure(errstr);
 }
 
+std::uint64_t auxlab2FigureFromHandle(void* userdata, std::uint64_t handleId, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsFigureFromHandle(handleId, errstr);
+}
+
+std::uint64_t auxlab2FigureAtPos(void* userdata, const double pos[4], std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  if (!pos) {
+    errstr = "figure() requires a position vector.";
+    return 0;
+  }
+  return window->createGraphicsFigureAtPos({pos[0], pos[1], pos[2], pos[3]}, errstr);
+}
+
+std::uint64_t auxlab2NamedFigure(void* userdata, const char* sourceName, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  if (!sourceName || !*sourceName) {
+    errstr = "figure() requires a non-empty source name.";
+    return 0;
+  }
+  return window->createGraphicsNamedFigure(sourceName, errstr);
+}
+
+std::uint64_t auxlab2Plot(void* userdata,
+                          std::uint64_t targetHandleId,
+                          AuxObj obj,
+                          const char* sourceExpr,
+                          const char* styleText,
+                          std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsPlot(targetHandleId,
+                                    obj,
+                                    sourceExpr ? std::string(sourceExpr) : std::string(),
+                                    styleText ? std::string(styleText) : std::string(),
+                                    errstr);
+}
+
+std::uint64_t auxlab2Line(void* userdata,
+                          std::uint64_t targetHandleId,
+                          AuxObj xObj,
+                          AuxObj yObj,
+                          std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsLine(targetHandleId, xObj, yObj, errstr);
+}
+
 std::uint64_t auxlab2CreateAxes(void* userdata, std::string& errstr) {
   auto* window = static_cast<MainWindow*>(userdata);
   if (!window) {
@@ -475,6 +605,11 @@ MainWindow::MainWindow() {
     backend.current_figure = &auxlab2CurrentFigureId;
     backend.current_axes = &auxlab2CurrentAxesId;
     backend.create_figure = &auxlab2CreateFigure;
+    backend.figure_from_handle = &auxlab2FigureFromHandle;
+    backend.figure_at_pos = &auxlab2FigureAtPos;
+    backend.named_figure = &auxlab2NamedFigure;
+    backend.plot = &auxlab2Plot;
+    backend.line = &auxlab2Line;
     backend.create_axes = &auxlab2CreateAxes;
     backend.axes_from_handle = &auxlab2AxesFromHandle;
     backend.axes_at_pos = &auxlab2AxesAtPos;
@@ -540,6 +675,192 @@ std::uint64_t MainWindow::createGraphicsFigure(std::string& err) {
     return 0;
   }
   return window->graphicsModel().figure().common.id;
+}
+
+std::uint64_t MainWindow::createGraphicsFigureFromHandle(std::uint64_t handleId, std::string& err) {
+  if (handleId == 0) {
+    err = "Error: invalid figure argument: 0";
+    return 0;
+  }
+
+  auto* figure = graphicsManager_.findFigureById(handleId);
+  if (!figure) {
+    err = "Error: figure handle not found: " + std::to_string(handleId);
+    return 0;
+  }
+
+  focusWindow(figure);
+  graphicsManager_.markFocused(figure);
+  return figure->graphicsModel().figure().common.id;
+}
+
+std::uint64_t MainWindow::createGraphicsFigureAtPos(const std::array<double, 4>& pos, std::string& err) {
+  auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), matlabFigureRectToQt(pos));
+  if (!window) {
+    err = "Failed to create figure window.";
+    return 0;
+  }
+  return window->graphicsModel().figure().common.id;
+}
+
+std::uint64_t MainWindow::createGraphicsNamedFigure(const std::string& sourcePath, std::string& err) {
+  const QString path = QString::fromStdString(sourcePath);
+  if (path.isEmpty() || !variableSupportsSignalDisplay(path)) {
+    err = "Error: variable not plottable: " + sourcePath;
+    return 0;
+  }
+
+  if (auto* existing = graphicsManager_.findNamedFigure(path)) {
+    focusWindow(existing);
+    graphicsManager_.markFocused(existing);
+    return existing->graphicsModel().figure().common.id;
+  }
+
+  openSignalGraphForPath(path);
+  if (auto* current = graphicsManager_.currentFigureWindow()) {
+    return current->graphicsModel().figure().common.id;
+  }
+
+  err = "Failed to create named figure.";
+  return 0;
+}
+
+std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
+                                             AuxObj obj,
+                                             const std::string& sourceExpr,
+                                             const std::string& styleText,
+                                             std::string& err) {
+  auto sig = signalDataFromAuxObj(obj, engine_.runtimeSettings().sampleRate);
+  if (!sig) {
+    err = "Error: plot argument is not plottable.";
+    return 0;
+  }
+
+  SignalGraphWindow* targetWindow = nullptr;
+  if (targetHandleId != 0) {
+    targetWindow = graphicsManager_.findFigureById(targetHandleId);
+    if (!targetWindow) {
+      if (auto* owner = graphicsManager_.findAxesOwner(targetHandleId)) {
+        owner->selectAxes(targetHandleId);
+        targetWindow = owner;
+      }
+    }
+    if (!targetWindow) {
+      err = "Error: figure/axes handle not found: " + std::to_string(targetHandleId);
+      return 0;
+    }
+  }
+
+  if (!targetWindow) {
+    targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), *sig, false, QString(), false);
+  } else {
+    targetWindow->updateData(*sig);
+    focusWindow(targetWindow);
+    graphicsManager_.markFocused(targetWindow);
+  }
+
+  const QString expr = QString::fromStdString(sourceExpr);
+  if (!expr.isEmpty() && !sig->isAudio && !sig->channels.empty()) {
+    const int expectedLength = static_cast<int>(sig->channels.front().samples.size());
+    if (const auto xdata = extractRangeXData(expr, expectedLength); xdata.has_value()) {
+      targetWindow->applyXDataToAllLines(*xdata);
+    }
+  }
+
+  const QString styleArg = QString::fromStdString(styleText);
+  if (!styleArg.isEmpty()) {
+    const PlotStyleSpec styleSpec = parsePlotStyleString(styleArg);
+    if (!styleSpec.valid) {
+      err = "Error: invalid plot style: \"" + styleText + "\"";
+      return 0;
+    }
+    targetWindow->applyStyleToAllLines(styleSpec.hasColor ? std::optional<QColor>(styleSpec.color) : std::nullopt,
+                                       styleSpec.marker,
+                                       styleSpec.lineStyle);
+  }
+
+  return targetWindow ? targetWindow->graphicsModel().figure().common.id : 0;
+}
+
+std::uint64_t MainWindow::createGraphicsLine(std::uint64_t targetHandleId,
+                                             AuxObj xObj,
+                                             AuxObj yObj,
+                                             std::string& err) {
+  QVector<double> xVals;
+  QVector<double> yVals;
+
+  if (yObj == nullptr) {
+    auto maybeY = numericVectorFromAuxObj(xObj);
+    if (!maybeY.has_value()) {
+      err = "Error: line data is not a numeric vector.";
+      return 0;
+    }
+    yVals = *maybeY;
+    xVals.reserve(yVals.size());
+    for (int i = 0; i < yVals.size(); ++i) {
+      xVals.push_back(i + 1);
+    }
+  } else {
+    auto maybeX = numericVectorFromAuxObj(xObj);
+    auto maybeY = numericVectorFromAuxObj(yObj);
+    if (!maybeX.has_value()) {
+      err = "Error: line x data is not a numeric vector.";
+      return 0;
+    }
+    if (!maybeY.has_value()) {
+      err = "Error: line data is not a numeric vector.";
+      return 0;
+    }
+    xVals = *maybeX;
+    yVals = *maybeY;
+    if (xVals.size() != yVals.size()) {
+      err = "Error: x and y for line() must have the same length.";
+      return 0;
+    }
+  }
+
+  SignalGraphWindow* targetWindow = nullptr;
+  std::uint64_t targetAxesId = 0;
+  if (targetHandleId != 0) {
+    if (auto* owner = graphicsManager_.findAxesOwner(targetHandleId)) {
+      owner->selectAxes(targetHandleId);
+      targetWindow = owner;
+      targetAxesId = targetHandleId;
+    } else if (auto* figure = graphicsManager_.findFigureById(targetHandleId)) {
+      targetWindow = figure;
+      if (const auto* currentAxes = figure->graphicsModel().currentAxes()) {
+        targetAxesId = currentAxes->common.id;
+      } else {
+        targetAxesId = figure->addAxes({0.08, 0.18, 0.86, 0.72});
+      }
+    } else {
+      err = "Error: figure/axes handle not found: " + std::to_string(targetHandleId);
+      return 0;
+    }
+  }
+
+  if (!targetWindow) {
+    SignalData emptyData;
+    targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), emptyData, false, QString(), false);
+    if (!targetWindow) {
+      err = "Failed to create figure window for line().";
+      return 0;
+    }
+    if (const auto* currentAxes = targetWindow->graphicsModel().currentAxes()) {
+      targetAxesId = currentAxes->common.id;
+    } else {
+      targetAxesId = targetWindow->addAxes({0.08, 0.18, 0.86, 0.72});
+    }
+  }
+
+  const auto lineId = targetWindow->addLine(targetAxesId, xVals, yVals);
+  if (lineId == 0) {
+    err = "Error: failed to create line object.";
+    return 0;
+  }
+  focusWindow(targetWindow);
+  graphicsManager_.markFocused(targetWindow);
+  return lineId;
 }
 
 std::uint64_t MainWindow::createGraphicsAxes(std::string& err) {
@@ -1534,10 +1855,32 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   }
 
   static const QRegularExpression kAxesCallForAuxe(R"(^axes\s*\((.*)\)$)");
+  static const QRegularExpression kFigureCallForAuxe(R"(^figure\s*\((.*)\)$)");
+  static const QRegularExpression kFigureNoArgForBridge(R"(^figure\s*\(\s*\)$)");
+  static const QRegularExpression kPlotCallForBridgeOrAuxe(R"(^plot\s*\((.*)\)$)");
+  static const QRegularExpression kLineCallForAuxe(R"(^line\s*\((.*)\)$)");
   static const QRegularExpression kDeleteCallForAuxe(R"(^delete\s*\((.*)\)$)");
+  bool simplePlotForAuxe = false;
+  if (const auto plotCallMatch = kPlotCallForBridgeOrAuxe.match(normalized); plotCallMatch.hasMatch()) {
+    const QStringList plotArgs = splitTopLevelArgs(plotCallMatch.captured(1).trimmed());
+    if (plotArgs.size() == 1) {
+      simplePlotForAuxe = isSimpleIdentifier(plotArgs[0]);
+    } else if (plotArgs.size() == 2) {
+      if (isQuotedStringLiteral(plotArgs[1])) {
+        simplePlotForAuxe = isSimpleIdentifier(plotArgs[0]);
+      } else {
+        simplePlotForAuxe = isSimpleIdentifier(plotArgs[1]);
+      }
+    } else if (plotArgs.size() == 3) {
+      simplePlotForAuxe = isQuotedStringLiteral(plotArgs[2]) && isSimpleIdentifier(plotArgs[1]);
+    }
+  }
   // Let auxe own migrated special variables and builtin forms. More complex
   // expressions such as gcf.color still route through the existing auxlab2 bridge.
   if (normalized == "gcf" || normalized == "gca" || normalized == "figure" || normalized == "axes" ||
+      (kFigureCallForAuxe.match(normalized).hasMatch() && !kFigureNoArgForBridge.match(normalized).hasMatch()) ||
+      simplePlotForAuxe ||
+      kLineCallForAuxe.match(normalized).hasMatch() ||
       kAxesCallForAuxe.match(normalized).hasMatch() ||
       kDeleteCallForAuxe.match(normalized).hasMatch()) {
     return false;
