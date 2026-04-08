@@ -1,6 +1,7 @@
 #include "GraphicsObjects.h"
 
 #include <algorithm>
+#include <atomic>
 
 namespace {
 std::array<double, 4> kDefaultMonoAxesPos{0.08, 0.18, 0.86, 0.72};
@@ -341,7 +342,8 @@ void GraphicsFigureModel::applyStereoLayout() {
 }
 
 std::uint64_t GraphicsFigureModel::nextId() {
-  return nextId_++;
+  static std::atomic<std::uint64_t> globalNextId{1};
+  return globalNextId.fetch_add(1, std::memory_order_relaxed);
 }
 std::uint64_t GraphicsFigureModel::addAxes(const std::array<double, 4>& pos) {
   auto& axes = addAxesHandle(static_cast<int>(axes_.size()), pos);

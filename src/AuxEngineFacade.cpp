@@ -494,7 +494,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
     snap.type = aux_type(obj);
     snap.typeTag = shortTypeTag(snap.type);
     aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR") {
+    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
       snap.preview = scalarOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
@@ -533,7 +533,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listStructMembers(const std::string& p
     snap.isAudio = aux_is_audio(kv.second);
     snap.channels = aux_num_channels(kv.second);
     aux_describe_var(ctx, kv.second, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR") {
+    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
       snap.preview = scalarOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
@@ -573,7 +573,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listCellMembers(const std::string& pat
     snap.isAudio = aux_is_audio(obj);
     snap.channels = aux_num_channels(obj);
     aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR") {
+    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
       snap.preview = scalarOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {

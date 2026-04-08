@@ -135,5 +135,4 @@ private:
   std::uint64_t currentAxesId_ = 0;
   bool stereoOverlay_ = false;
   int channelCount_ = 0;
-  std::uint64_t nextId_ = 1;
 };

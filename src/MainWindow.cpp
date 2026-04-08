@@ -150,15 +150,15 @@ std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
   if (!obj) {
     return std::nullopt;
   }
-  if (aux_num_channels(obj) != 1 || aux_is_audio(obj)) {
+  if (aux_is_audio(obj)) {
     return std::nullopt;
   }
-  const size_t len = aux_flatten_channel_length(obj, 0);
+  const size_t len = aux_vector_length(obj);
   if (len == 0) {
     return std::nullopt;
   }
   QVector<double> values(static_cast<qsizetype>(len));
-  if (aux_flatten_channel(obj, 0, values.data(), len) != len) {
+  if (aux_copy_vector(obj, values.data(), len) != len) {
     return std::nullopt;
   }
   return values;
