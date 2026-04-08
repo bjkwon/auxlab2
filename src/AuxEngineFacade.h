@@ -54,6 +54,8 @@ public:
   ~AuxEngineFacade();
 
   bool init();
+  bool installGraphicsBackend(const auxGraphicsBackend& backend, std::string& err);
+  void clearGraphicsBackend();
   EvalResult eval(const std::string& command);
   int pollAsync();
 

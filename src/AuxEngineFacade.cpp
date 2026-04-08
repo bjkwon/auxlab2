@@ -395,6 +395,25 @@ bool AuxEngineFacade::init() {
   return rootCtx_ != nullptr;
 }
 
+bool AuxEngineFacade::installGraphicsBackend(const auxGraphicsBackend& backend, std::string& err) {
+  if (!rootCtx_) {
+    err = "AUX engine is not initialized.";
+    return false;
+  }
+  if (aux_install_graphics_backend(rootCtx_, backend) != 0) {
+    err = "Failed to install graphics backend.";
+    return false;
+  }
+  return true;
+}
+
+void AuxEngineFacade::clearGraphicsBackend() {
+  if (!rootCtx_) {
+    return;
+  }
+  aux_clear_graphics_backend(rootCtx_);
+}
+
 EvalResult AuxEngineFacade::eval(const std::string& command) {
   EvalResult out;
   if (!rootCtx_) {

@@ -35,6 +35,7 @@ class MainWindow : public QMainWindow {
 public:
   MainWindow();
   ~MainWindow() override;
+  bool handleGraphicsBackendEvent(const auxGraphicsEvent& event, std::string& err);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -141,7 +142,6 @@ private:
   QString activeDebugFilePath() const;
   void showSettingsDialog();
   void showAboutDialog();
-
   AuxEngineFacade engine_;
   GraphicsManager graphicsManager_;
 

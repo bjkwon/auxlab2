@@ -395,11 +395,28 @@ bool parseBoolExpr(const QString& text, bool& value) {
   }
   return false;
 }
+
+int auxlab2GraphicsNotify(void* userdata, const auxGraphicsEvent& event, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 1;
+  }
+  return window->handleGraphicsBackendEvent(event, errstr) ? 0 : 1;
+}
 }  // namespace
 
 MainWindow::MainWindow() {
   if (!engine_.init()) {
     QMessageBox::critical(nullptr, "AUX", "Failed to initialize AUX engine.");
+  } else {
+    auxGraphicsBackend backend;
+    backend.userdata = this;
+    backend.notify = &auxlab2GraphicsNotify;
+    std::string err;
+    if (!engine_.installGraphicsBackend(backend, err)) {
+      QMessageBox::warning(this, "AUX Graphics", QString::fromStdString(err));
+    }
   }
 
   loadPersistedRuntimeSettings();
@@ -421,9 +438,25 @@ MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
+  engine_.clearGraphicsBackend();
   if (varAudioSink_) {
     varAudioSink_->stop();
   }
+}
+
+bool MainWindow::handleGraphicsBackendEvent(const auxGraphicsEvent& event, std::string& err) {
+  Q_UNUSED(err);
+  switch (event.kind) {
+    case auxGraphicsEventKind::AUX_GRAPHICS_OBJECT_CREATED:
+    case auxGraphicsEventKind::AUX_GRAPHICS_OBJECT_DELETED:
+    case auxGraphicsEventKind::AUX_GRAPHICS_PROPERTY_CHANGED:
+    case auxGraphicsEventKind::AUX_GRAPHICS_CURRENT_FIGURE_CHANGED:
+    case auxGraphicsEventKind::AUX_GRAPHICS_CURRENT_AXES_CHANGED:
+    case auxGraphicsEventKind::AUX_GRAPHICS_NAMED_PLOT_SOURCE_UPDATED:
+      reconcileScopedWindows();
+      return true;
+  }
+  return true;
 }
 
 void MainWindow::buildUi() {
