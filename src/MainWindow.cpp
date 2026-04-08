@@ -23,6 +23,7 @@
 #include <QFileSystemWatcher>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QListWidget>
@@ -35,6 +36,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QSpinBox>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QSplitter>
@@ -92,6 +94,306 @@ constexpr Qt::KeyboardModifier kPrimaryWindowModifier = Qt::ControlModifier;
 
 QKeySequence primaryWindowShortcut(Qt::Key key, Qt::KeyboardModifiers extra = Qt::NoModifier) {
   return QKeySequence(QKeyCombination(kPrimaryWindowModifier | extra, key));
+}
+
+QString graphicsHandleText(std::uint64_t id) {
+  return id == 0 ? QStringLiteral("[]") : QString::number(id);
+}
+
+QString nextGraphicsTempName() {
+  static int counter = 1;
+  return QString("__auxlab2_graphics_tmp_%1").arg(counter++);
+}
+
+bool parseMatlabPosVector(const QString& text, std::array<double, 4>& out) {
+  QString t = text.trimmed();
+  if (!t.startsWith('[') || !t.endsWith(']')) {
+    return false;
+  }
+  t = t.mid(1, t.size() - 2).trimmed();
+  const QStringList parts = t.split(QRegularExpression(R"([\s,;]+)"), Qt::SkipEmptyParts);
+  if (parts.size() != 4) {
+    return false;
+  }
+  bool ok = false;
+  for (int i = 0; i < 4; ++i) {
+    out[static_cast<size_t>(i)] = parts[i].toDouble(&ok);
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
+QRect matlabFigureRectToQt(const std::array<double, 4>& pos) {
+  const QRect screen = QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->availableGeometry() : QRect(0, 0, 1440, 900);
+  const int x = static_cast<int>(std::llround(pos[0]));
+  const int width = static_cast<int>(std::llround(pos[2]));
+  const int height = static_cast<int>(std::llround(pos[3]));
+  const int yBottom = static_cast<int>(std::llround(pos[1]));
+  const int yTop = screen.y() + screen.height() - yBottom - height;
+  return QRect(x, yTop, width, height);
+}
+
+QStringList splitTopLevelArgs(const QString& text) {
+  QStringList out;
+  QString current;
+  int paren = 0;
+  int bracket = 0;
+  bool inString = false;
+  for (int i = 0; i < text.size(); ++i) {
+    const QChar ch = text[i];
+    if (ch == '"' && (i == 0 || text[i - 1] != '\\')) {
+      inString = !inString;
+      current += ch;
+      continue;
+    }
+    if (!inString) {
+      if (ch == '(') ++paren;
+      else if (ch == ')') --paren;
+      else if (ch == '[') ++bracket;
+      else if (ch == ']') --bracket;
+      else if (ch == ',' && paren == 0 && bracket == 0) {
+        out.push_back(current.trimmed());
+        current.clear();
+        continue;
+      }
+    }
+    current += ch;
+  }
+  if (!current.trimmed().isEmpty()) {
+    out.push_back(current.trimmed());
+  }
+  return out;
+}
+
+bool isSimpleIdentifier(const QString& text) {
+  static const QRegularExpression kIdentPattern(R"(^[A-Za-z_][A-Za-z0-9_]*$)");
+  return kIdentPattern.match(text.trimmed()).hasMatch();
+}
+
+bool isQuotedStringLiteral(const QString& text) {
+  const QString t = text.trimmed();
+  return t.size() >= 2 && t.startsWith('"') && t.endsWith('"');
+}
+
+QString unquoteStringLiteral(const QString& text) {
+  const QString t = text.trimmed();
+  if (!isQuotedStringLiteral(t)) {
+    return t;
+  }
+  return t.mid(1, t.size() - 2);
+}
+
+struct PlotStyleSpec {
+  bool valid = true;
+  bool hasColor = false;
+  QColor color;
+  QString marker;
+  QString lineStyle = "-";
+};
+
+PlotStyleSpec parsePlotStyleString(const QString& text) {
+  PlotStyleSpec spec;
+  QString s = text.trimmed();
+  int idx = 0;
+
+  auto parseColor = [&](QChar ch) -> bool {
+    switch (ch.toLatin1()) {
+      case 'r': spec.color = Qt::red; return true;
+      case 'g': spec.color = QColor(0, 160, 0); return true;
+      case 'b': spec.color = Qt::blue; return true;
+      case 'y': spec.color = Qt::yellow; return true;
+      case 'c': spec.color = Qt::cyan; return true;
+      case 'm': spec.color = Qt::magenta; return true;
+      case 'h': spec.color = Qt::white; return true;
+      case 'k': spec.color = Qt::black; return true;
+      default: return false;
+    }
+  };
+
+  if (idx < s.size() && parseColor(s[idx])) {
+    spec.hasColor = true;
+    ++idx;
+  }
+
+  if (idx < s.size()) {
+    const QChar ch = s[idx];
+    const QString markers = QStringLiteral("o+*.xsd^v<>ph");
+    if (markers.contains(ch) || ch == ' ') {
+      spec.marker = (ch == ' ') ? QString() : QString(ch);
+      ++idx;
+    }
+  }
+
+  const QString rest = s.mid(idx);
+  if (rest.isEmpty()) {
+    if (!spec.marker.isEmpty()) {
+      spec.lineStyle = QStringLiteral("none");
+    }
+    return spec;
+  }
+
+  if (rest == "-" || rest == "--" || rest == ":" || rest == "-." || rest == "none") {
+    spec.lineStyle = rest;
+    return spec;
+  }
+
+  spec.valid = false;
+  return spec;
+}
+
+std::optional<QVector<double>> extractRangeXData(const QString& expr, int expectedLength) {
+  if (expectedLength <= 0) {
+    return std::nullopt;
+  }
+
+  static const QRegularExpression kRange3(R"(([-+]?\d+(?:\.\d+)?)\s*:\s*([-+]?\d+(?:\.\d+)?)\s*:\s*([-+]?\d+(?:\.\d+)?))");
+  static const QRegularExpression kRange2(R"(([-+]?\d+(?:\.\d+)?)\s*:\s*([-+]?\d+(?:\.\d+)?))");
+
+  std::optional<QVector<double>> result;
+
+  auto tryBuild = [expectedLength](double start, double step, double end) -> std::optional<QVector<double>> {
+    if (std::fabs(step) < 1e-12) {
+      return std::nullopt;
+    }
+    QVector<double> values;
+    values.reserve(expectedLength);
+
+    const double eps = std::max(1e-9, std::fabs(step) * 1e-9);
+    if (step > 0) {
+      for (double v = start; v <= end + eps && values.size() < expectedLength; v += step) {
+        values.push_back(v);
+      }
+    } else {
+      for (double v = start; v >= end - eps && values.size() < expectedLength; v += step) {
+        values.push_back(v);
+      }
+    }
+
+    if (values.size() != expectedLength) {
+      return std::nullopt;
+    }
+    return values;
+  };
+
+  auto it3 = kRange3.globalMatch(expr);
+  while (it3.hasNext()) {
+    const auto match = it3.next();
+    bool ok1 = false, ok2 = false, ok3 = false;
+    const double start = match.captured(1).toDouble(&ok1);
+    const double step = match.captured(2).toDouble(&ok2);
+    const double end = match.captured(3).toDouble(&ok3);
+    if (ok1 && ok2 && ok3) {
+      if (auto values = tryBuild(start, step, end)) {
+        result = values;
+      }
+    }
+  }
+  if (result.has_value()) {
+    return result;
+  }
+
+  auto it2 = kRange2.globalMatch(expr);
+  while (it2.hasNext()) {
+    const auto match = it2.next();
+    bool ok1 = false, ok2 = false;
+    const double start = match.captured(1).toDouble(&ok1);
+    const double end = match.captured(2).toDouble(&ok2);
+    if (ok1 && ok2) {
+      const double step = (end >= start) ? 1.0 : -1.0;
+      if (auto values = tryBuild(start, step, end)) {
+        result = values;
+      }
+    }
+  }
+
+  return result;
+}
+
+QString formatDoubleCompact(double value) {
+  const double rounded = std::round(value);
+  if (std::fabs(value - rounded) < 1e-9) {
+    return QString::number(static_cast<long long>(rounded));
+  }
+  return QString::number(value, 'g', 8);
+}
+
+QString formatDoubleVector(const QVector<double>& values) {
+  QStringList parts;
+  parts.reserve(values.size());
+  for (double value : values) {
+    parts.push_back(formatDoubleCompact(value));
+  }
+  return QString("[%1]").arg(parts.join(' '));
+}
+
+QString formatDoubleArray2(const std::array<double, 2>& values) {
+  return QString("[%1 %2]").arg(formatDoubleCompact(values[0]), formatDoubleCompact(values[1]));
+}
+
+QString formatDoubleArray4(const std::array<double, 4>& values) {
+  return QString("[%1 %2 %3 %4]").arg(formatDoubleCompact(values[0]),
+                                      formatDoubleCompact(values[1]),
+                                      formatDoubleCompact(values[2]),
+                                      formatDoubleCompact(values[3]));
+}
+
+QString formatChildren(const std::vector<std::uint64_t>& children) {
+  if (children.empty()) {
+    return QStringLiteral("[]");
+  }
+  QStringList parts;
+  parts.reserve(static_cast<int>(children.size()));
+  for (std::uint64_t child : children) {
+    parts.push_back(QString::number(child));
+  }
+  return QString("[%1]").arg(parts.join(' '));
+}
+
+QString formatColor(const QColor& color) {
+  return QString("[%1 %2 %3]")
+      .arg(formatDoubleCompact(color.redF()))
+      .arg(formatDoubleCompact(color.greenF()))
+      .arg(formatDoubleCompact(color.blueF()));
+}
+
+bool parseDoubleVectorExpr(const QString& text, QVector<double>& out) {
+  QString t = text.trimmed();
+  if (!t.startsWith('[') || !t.endsWith(']')) {
+    return false;
+  }
+  t = t.mid(1, t.size() - 2).trimmed();
+  const QStringList parts = t.split(QRegularExpression(R"([\s,;]+)"), Qt::SkipEmptyParts);
+  if (parts.isEmpty()) {
+    out.clear();
+    return true;
+  }
+  QVector<double> values;
+  values.reserve(parts.size());
+  for (const QString& part : parts) {
+    bool ok = false;
+    const double value = part.toDouble(&ok);
+    if (!ok) {
+      return false;
+    }
+    values.push_back(value);
+  }
+  out = values;
+  return true;
+}
+
+bool parseBoolExpr(const QString& text, bool& value) {
+  const QString t = text.trimmed().toLower();
+  if (t == "true" || t == "1") {
+    value = true;
+    return true;
+  }
+  if (t == "false" || t == "0") {
+    value = false;
+    return true;
+  }
+  return false;
 }
 }  // namespace
 
@@ -893,6 +1195,28 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 void MainWindow::runCommand(const QString& cmd) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
   QString actual = cmd;
+  if (!actual.trimmed().isEmpty()) {
+    addHistory(actual);
+  }
+  QString graphicsOutput;
+  if (!actual.trimmed().isEmpty() && tryHandleGraphicsCommand(actual, graphicsOutput)) {
+    updateCommandPrompt();
+    const QString trimmed = actual.trimmed();
+    if (trimmed.endsWith(';')) {
+      commandBox_->appendExecutionResult({});
+    } else {
+      commandBox_->appendExecutionResult(graphicsOutput);
+    }
+    historyNavIndex_ = -1;
+    historyDraft_.clear();
+    reverseSearchActive_ = false;
+    reverseSearchTerm_.clear();
+    reverseSearchIndex_ = -1;
+    refreshVariables();
+    refreshDebugView();
+    reconcileScopedWindows();
+    return;
+  }
   const QString trimmedForRewrite = actual.trimmed();
   static const QRegularExpression kDotAssignPattern(
       R"(^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*=)");
@@ -907,7 +1231,6 @@ void MainWindow::runCommand(const QString& cmd) {
   }
 
   if (!actual.trimmed().isEmpty()) {
-    addHistory(actual);
     auto result = engine_.eval(actual.toStdString());
     updateCommandPrompt();
     const QString trimmed = actual.trimmed();
@@ -936,6 +1259,775 @@ void MainWindow::runCommand(const QString& cmd) {
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();
+}
+
+bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
+  const QString trimmed = cmd.trimmed();
+  if (trimmed.isEmpty()) {
+    return false;
+  }
+
+  static const QRegularExpression kTrailingSemi(R"(;\s*$)");
+  QString normalized = QString(trimmed).remove(kTrailingSemi).trimmed();
+  QString lhs;
+  static const QRegularExpression kAssignPattern(R"(^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$)");
+  const QRegularExpressionMatch assignMatch = kAssignPattern.match(normalized);
+  if (assignMatch.hasMatch()) {
+    lhs = assignMatch.captured(1).trimmed();
+    normalized = assignMatch.captured(2).trimmed();
+  }
+
+  static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes\s*\(\s*\)$)");
+  static const QRegularExpression kMethodDeleteNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.delete\s*\(\s*\)$)");
+  static const QRegularExpression kMethodPlot(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot\s*\((.*)\)$)");
+  static const QRegularExpression kMethodLine(R"(^([A-Za-z_][A-Za-z0-9_]*)\.line\s*\((.*)\)$)");
+  static const QRegularExpression kMethodText(R"(^([A-Za-z_][A-Za-z0-9_]*)\.text\s*\((.*)\)$)");
+  if (const auto methodAxesMatch = kMethodAxesNoArg.match(normalized); methodAxesMatch.hasMatch()) {
+    normalized = QString("axes(%1)").arg(methodAxesMatch.captured(1));
+  } else if (const auto methodDeleteMatch = kMethodDeleteNoArg.match(normalized); methodDeleteMatch.hasMatch()) {
+    normalized = QString("delete(%1)").arg(methodDeleteMatch.captured(1));
+  } else if (const auto methodPlotMatch = kMethodPlot.match(normalized); methodPlotMatch.hasMatch()) {
+    normalized = QString("plot(%1, %2)").arg(methodPlotMatch.captured(1), methodPlotMatch.captured(2).trimmed());
+  } else if (const auto methodLineMatch = kMethodLine.match(normalized); methodLineMatch.hasMatch()) {
+    normalized = QString("line(%1, %2)").arg(methodLineMatch.captured(1), methodLineMatch.captured(2).trimmed());
+  } else if (const auto methodTextMatch = kMethodText.match(normalized); methodTextMatch.hasMatch()) {
+    normalized = QString("text(%1, %2)").arg(methodTextMatch.captured(1), methodTextMatch.captured(2).trimmed());
+  }
+
+  auto finalizeOutput = [this, &lhs, &output](const QString& value) {
+    output = value;
+    if (!lhs.isEmpty() && !value.startsWith(QStringLiteral("Error:"))) {
+      const QString assignExpr = QString("%1=%2").arg(lhs, value);
+      engine_.eval(assignExpr.toStdString());
+    }
+    return true;
+  };
+
+  auto resolveHandleId = [this](const QString& text, std::uint64_t& outId, QString* sourceVar = nullptr) -> bool {
+    const QString trimmedText = text.trimmed();
+    if (trimmedText == "gcf") {
+      outId = graphicsManager_.currentFigureId();
+      if (sourceVar) {
+        sourceVar->clear();
+      }
+      return outId != 0;
+    }
+    if (trimmedText == "gca") {
+      outId = graphicsManager_.currentAxesId();
+      if (sourceVar) {
+        sourceVar->clear();
+      }
+      return outId != 0;
+    }
+    bool localOk = false;
+    const auto directId = trimmedText.toULongLong(&localOk);
+    if (localOk && directId > 0) {
+      outId = directId;
+      if (sourceVar) {
+        sourceVar->clear();
+      }
+      return true;
+    }
+
+    if (!isSimpleIdentifier(trimmedText)) {
+      return false;
+    }
+
+    const auto scalar = engine_.getScalarValue(trimmedText.toStdString());
+    if (!scalar.has_value()) {
+      return false;
+    }
+
+    const double rounded = std::llround(*scalar);
+    if (rounded <= 0 || std::fabs(*scalar - rounded) > 1e-9) {
+      return false;
+    }
+
+    outId = static_cast<std::uint64_t>(rounded);
+    if (sourceVar) {
+      *sourceVar = trimmedText;
+    }
+    return true;
+  };
+
+  auto graphWindowForLineId = [this](std::uint64_t lineId) -> SignalGraphWindow* {
+    for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
+      if (it->kind != WindowKind::Graph || !it->window) {
+        continue;
+      }
+      if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
+        if (g->graphicsModel().containsLine(lineId)) {
+          return g;
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  auto graphWindowForTextId = [this](std::uint64_t textId) -> SignalGraphWindow* {
+    for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
+      if (it->kind != WindowKind::Graph || !it->window) {
+        continue;
+      }
+      if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
+        if (g->graphicsModel().containsText(textId)) {
+          return g;
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  auto graphWindowForAnyHandle = [&](std::uint64_t handleId) -> SignalGraphWindow* {
+    if (auto* owner = graphicsManager_.findFigureById(handleId)) {
+      return owner;
+    }
+    if (auto* owner = graphicsManager_.findAxesOwner(handleId)) {
+      return owner;
+    }
+    if (auto* owner = graphWindowForLineId(handleId)) {
+      return owner;
+    }
+    return graphWindowForTextId(handleId);
+  };
+
+  auto evaluateVectorExpr = [this](const QString& expr) -> std::optional<QVector<double>> {
+    const QString tmpVar = nextGraphicsTempName();
+    const EvalResult evalResult = engine_.eval(QString("%1=%2").arg(tmpVar, expr).toStdString());
+    if (evalResult.status != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+      engine_.deleteVar(tmpVar.toStdString());
+      return std::nullopt;
+    }
+    auto values = engine_.getNumericVector(tmpVar.toStdString());
+    engine_.deleteVar(tmpVar.toStdString());
+    return values;
+  };
+
+  auto handleGetter = [&](std::uint64_t handleId, const QString& prop) -> QString {
+    SignalGraphWindow* owner = graphWindowForAnyHandle(handleId);
+    if (!owner) {
+      return QString("Error: graphics handle not found: %1").arg(handleId);
+    }
+
+    const auto& model = owner->graphicsModel();
+    const QString key = prop.trimmed().toLower();
+    const auto figureId = model.figure().common.id;
+
+    auto commonGetter = [&](const GraphicsObjectCommon& common) -> QString {
+      if (key == "pos") return formatDoubleArray4(common.pos);
+      if (key == "color") return formatColor(common.color);
+      if (key == "visible") return common.visible ? QStringLiteral("1") : QStringLiteral("0");
+      if (key == "parent") return common.parentId == 0 ? QStringLiteral("[]") : QString::number(common.parentId);
+      if (key == "children") return formatChildren(common.children);
+      return QString();
+    };
+
+    if (handleId == figureId) {
+      const auto& fig = model.figure();
+      if (key == "type") return QStringLiteral("\"figure\"");
+      if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
+      return QString("Error: unsupported figure property: %1").arg(prop);
+    }
+    if (const auto axes = std::find_if(model.axes().begin(), model.axes().end(), [handleId](const GraphicsAxesHandle& ax) {
+          return ax.common.id == handleId;
+        }); axes != model.axes().end()) {
+      if (key == "type") return QStringLiteral("\"axes\"");
+      if (const QString value = commonGetter(axes->common); !value.isEmpty()) return value;
+      if (key == "box") return axes->box ? QStringLiteral("1") : QStringLiteral("0");
+      if (key == "linewidth") return QString::number(axes->lineWidth);
+      if (key == "xlim") return formatDoubleArray2(axes->xlim);
+      if (key == "ylim") return formatDoubleArray2(axes->ylim);
+      if (key == "fontname") return QString("\"%1\"").arg(axes->fontName);
+      if (key == "fontsize") return QString::number(axes->fontSize);
+      if (key == "xscale") return QString("\"%1\"").arg(axes->xscale);
+      if (key == "yscale") return QString("\"%1\"").arg(axes->yscale);
+      if (key == "xgrid") return axes->xgrid ? QStringLiteral("1") : QStringLiteral("0");
+      if (key == "ygrid") return axes->ygrid ? QStringLiteral("1") : QStringLiteral("0");
+      return QString("Error: unsupported axes property: %1").arg(prop);
+    }
+    if (const auto* line = model.lineById(handleId)) {
+      if (key == "type") return QStringLiteral("\"line\"");
+      if (const QString value = commonGetter(line->common); !value.isEmpty()) return value;
+      if (key == "xdata") return formatDoubleVector(line->xdata);
+      if (key == "ydata") return formatDoubleVector(line->ydata);
+      if (key == "linewidth") return QString::number(line->lineWidth);
+      if (key == "linestyle") return QString("\"%1\"").arg(line->lineStyle);
+      if (key == "marker") return QString("\"%1\"").arg(line->marker);
+      if (key == "markersize") return QString::number(line->markerSize);
+      return QString("Error: unsupported line property: %1").arg(prop);
+    }
+    if (const auto& texts = model.texts(); std::any_of(texts.begin(), texts.end(), [handleId](const GraphicsTextHandle& text) {
+          return text.common.id == handleId;
+        })) {
+      const auto* text = [&]() -> const GraphicsTextHandle* {
+        for (const auto& item : texts) {
+          if (item.common.id == handleId) return &item;
+        }
+        return nullptr;
+      }();
+      if (!text) {
+        return QString("Error: graphics handle not found: %1").arg(handleId);
+      }
+      if (key == "type") return QStringLiteral("\"text\"");
+      if (const QString value = commonGetter(text->common); !value.isEmpty()) return value;
+      if (key == "fontname") return QString("\"%1\"").arg(text->fontName);
+      if (key == "fontsize") return QString::number(text->fontSize);
+      if (key == "string") return QString("\"%1\"").arg(text->stringValue);
+      return QString("Error: unsupported text property: %1").arg(prop);
+    }
+    return QString("Error: graphics handle not found: %1").arg(handleId);
+  };
+
+  auto handleSetter = [&](std::uint64_t handleId, const QString& prop, const QString& rhs) -> QString {
+    SignalGraphWindow* owner = graphWindowForAnyHandle(handleId);
+    if (!owner) {
+      return QString("Error: graphics handle not found: %1").arg(handleId);
+    }
+
+    auto& model = owner->graphicsModelMutable();
+    const QString key = prop.trimmed().toLower();
+    const auto figureId = model.figure().common.id;
+    bool needsRefresh = true;
+
+    auto setCommon = [&](GraphicsObjectCommon& common) -> bool {
+      if (key == "pos") {
+        std::array<double, 4> pos{};
+        if (!parseMatlabPosVector(rhs, pos)) return false;
+        common.pos = pos;
+        return true;
+      }
+      if (key == "color") {
+        QVector<double> vals;
+        if (!parseDoubleVectorExpr(rhs, vals) || vals.size() != 3) return false;
+        common.color = QColor::fromRgbF(vals[0], vals[1], vals[2]);
+        return true;
+      }
+      if (key == "visible") {
+        bool visible = false;
+        if (!parseBoolExpr(rhs, visible)) return false;
+        common.visible = visible;
+        return true;
+      }
+      return false;
+    };
+
+    if (handleId == figureId) {
+      if (!setCommon(model.figureMutable().common)) {
+        return QString("Error: unsupported or invalid figure property assignment: %1").arg(prop);
+      }
+      owner->refreshGraphics();
+      return QStringLiteral("[]");
+    }
+    if (auto* axes = model.axesByIdMutable(handleId)) {
+      if (setCommon(axes->common)) {
+        owner->refreshGraphics();
+        return QStringLiteral("[]");
+      }
+      if (key == "box") {
+        bool value = false;
+        if (!parseBoolExpr(rhs, value)) return QString("Error: invalid axes property value for %1").arg(prop);
+        axes->box = value;
+      } else if (key == "linewidth") {
+        bool okNum = false;
+        const int value = rhs.trimmed().toInt(&okNum);
+        if (!okNum) return QString("Error: invalid axes property value for %1").arg(prop);
+        axes->lineWidth = value;
+      } else if (key == "xlim" || key == "ylim") {
+        QVector<double> vals;
+        if (!parseDoubleVectorExpr(rhs, vals) || vals.size() != 2) return QString("Error: invalid axes property value for %1").arg(prop);
+        if (key == "xlim") axes->xlim = {vals[0], vals[1]};
+        else axes->ylim = {vals[0], vals[1]};
+      } else if (key == "fontname" || key == "xscale" || key == "yscale") {
+        if (!isQuotedStringLiteral(rhs)) return QString("Error: invalid axes property value for %1").arg(prop);
+        const QString value = unquoteStringLiteral(rhs);
+        if (key == "fontname") axes->fontName = value;
+        else if (key == "xscale") axes->xscale = value;
+        else axes->yscale = value;
+      } else if (key == "fontsize") {
+        bool okNum = false;
+        const int value = rhs.trimmed().toInt(&okNum);
+        if (!okNum) return QString("Error: invalid axes property value for %1").arg(prop);
+        axes->fontSize = value;
+      } else if (key == "xgrid" || key == "ygrid") {
+        bool value = false;
+        if (!parseBoolExpr(rhs, value)) return QString("Error: invalid axes property value for %1").arg(prop);
+        if (key == "xgrid") axes->xgrid = value; else axes->ygrid = value;
+      } else {
+        return QString("Error: unsupported or invalid axes property assignment: %1").arg(prop);
+      }
+      owner->refreshGraphics();
+      return QStringLiteral("[]");
+    }
+    if (auto* line = model.lineByIdMutable(handleId)) {
+      if (setCommon(line->common)) {
+        owner->refreshGraphics();
+        return QStringLiteral("[]");
+      }
+      if (key == "xdata" || key == "ydata") {
+        auto values = evaluateVectorExpr(rhs);
+        if (!values.has_value()) return QString("Error: invalid line property value for %1").arg(prop);
+        if (key == "xdata") line->xdata = *values; else line->ydata = *values;
+        if (line->xdata.size() != line->ydata.size()) return QStringLiteral("Error: xdata and ydata must have the same length.");
+      } else if (key == "linewidth" || key == "markersize") {
+        bool okNum = false;
+        const int value = rhs.trimmed().toInt(&okNum);
+        if (!okNum) return QString("Error: invalid line property value for %1").arg(prop);
+        if (key == "linewidth") line->lineWidth = value; else line->markerSize = value;
+      } else if (key == "linestyle" || key == "marker") {
+        if (!isQuotedStringLiteral(rhs)) return QString("Error: invalid line property value for %1").arg(prop);
+        const QString value = unquoteStringLiteral(rhs);
+        if (key == "linestyle") line->lineStyle = value; else line->marker = value;
+      } else {
+        return QString("Error: unsupported or invalid line property assignment: %1").arg(prop);
+      }
+      owner->refreshGraphics();
+      return QStringLiteral("[]");
+    }
+    if (auto* text = model.textByIdMutable(handleId)) {
+      if (setCommon(text->common)) {
+        owner->refreshGraphics();
+        return QStringLiteral("[]");
+      }
+      if (key == "fontname" || key == "string") {
+        if (!isQuotedStringLiteral(rhs)) return QString("Error: invalid text property value for %1").arg(prop);
+        const QString value = unquoteStringLiteral(rhs);
+        if (key == "fontname") text->fontName = value; else text->stringValue = value;
+      } else if (key == "fontsize") {
+        bool okNum = false;
+        const int value = rhs.trimmed().toInt(&okNum);
+        if (!okNum) return QString("Error: invalid text property value for %1").arg(prop);
+        text->fontSize = value;
+      } else {
+        return QString("Error: unsupported or invalid text property assignment: %1").arg(prop);
+      }
+      owner->refreshGraphics();
+      return QStringLiteral("[]");
+    }
+    return QString("Error: graphics handle not found: %1").arg(handleId);
+  };
+
+  static const QRegularExpression kHandleSetPattern(R"(^([A-Za-z_][A-Za-z0-9_]*|gcf|gca|\d+)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$)");
+  if (const auto setMatch = kHandleSetPattern.match(normalized); setMatch.hasMatch()) {
+    std::uint64_t handleId = 0;
+    if (!resolveHandleId(setMatch.captured(1), handleId)) {
+      return finalizeOutput(QString("Error: invalid graphics handle: %1").arg(setMatch.captured(1)));
+    }
+    const QString result = handleSetter(handleId, setMatch.captured(2), setMatch.captured(3).trimmed());
+    output = result;
+    return true;
+  }
+
+  static const QRegularExpression kHandleGetPattern(R"(^([A-Za-z_][A-Za-z0-9_]*|gcf|gca|\d+)\.([A-Za-z_][A-Za-z0-9_]*)$)");
+  if (const auto getMatch = kHandleGetPattern.match(normalized); getMatch.hasMatch()) {
+    std::uint64_t handleId = 0;
+    if (!resolveHandleId(getMatch.captured(1), handleId)) {
+      return finalizeOutput(QString("Error: invalid graphics handle: %1").arg(getMatch.captured(1)));
+    }
+    return finalizeOutput(handleGetter(handleId, getMatch.captured(2)));
+  }
+
+  if (normalized == "figure") {
+    auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+  }
+
+  if (normalized == "gcf") {
+    return finalizeOutput(graphicsHandleText(graphicsManager_.currentFigureId()));
+  }
+  if (normalized == "gca") {
+    return finalizeOutput(graphicsHandleText(graphicsManager_.currentAxesId()));
+  }
+
+  static const QRegularExpression kFigureCall(R"(^figure\s*\((.*)\)$)");
+  static const QRegularExpression kFigureNoArg(R"(^figure\s*\(\s*\)$)");
+  static const QRegularExpression kPlotCall(R"(^plot\s*\((.*)\)$)");
+  static const QRegularExpression kLineCall(R"(^line\s*\((.*)\)$)");
+  static const QRegularExpression kTextCall(R"(^text\s*\((.*)\)$)");
+  static const QRegularExpression kAxesCall(R"(^axes\s*\((.*)\)$)");
+  static const QRegularExpression kDeleteCall(R"(^delete\s*\((.*)\)$)");
+  if (kFigureNoArg.match(normalized).hasMatch()) {
+    auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+  }
+
+  bool ok = false;
+
+  const QRegularExpressionMatch axesMatch = kAxesCall.match(normalized);
+  if (axesMatch.hasMatch()) {
+    const QString axesArg = axesMatch.captured(1).trimmed();
+    if (axesArg.isEmpty()) {
+      return finalizeOutput(QStringLiteral("Error: axes() requires a handle or position."));
+    }
+
+    std::array<double, 4> axesPos{};
+    if (parseMatlabPosVector(axesArg, axesPos)) {
+      SignalGraphWindow* window = graphicsManager_.currentFigureWindow();
+      if (!window) {
+        window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+      }
+      const auto axesId = window->addAxes(axesPos);
+      window->selectAxes(axesId);
+      graphicsManager_.markFocused(window);
+      focusWindow(window);
+      return finalizeOutput(graphicsHandleText(axesId));
+    }
+
+    std::uint64_t axesOrFigureId = 0;
+    if (!resolveHandleId(axesArg, axesOrFigureId)) {
+      return finalizeOutput(QString("Error: invalid axes argument: %1").arg(axesArg));
+    }
+
+    if (auto* owner = graphicsManager_.findAxesOwner(axesOrFigureId)) {
+      owner->selectAxes(axesOrFigureId);
+      graphicsManager_.markFocused(owner);
+      focusWindow(owner);
+      return finalizeOutput(graphicsHandleText(axesOrFigureId));
+    }
+
+    if (auto* figure = graphicsManager_.findFigureById(axesOrFigureId)) {
+      const auto axesId = figure->addAxes({0.08, 0.18, 0.86, 0.72});
+      figure->selectAxes(axesId);
+      graphicsManager_.markFocused(figure);
+      focusWindow(figure);
+      return finalizeOutput(graphicsHandleText(axesId));
+    }
+
+    return finalizeOutput(QString("Error: figure/axes handle not found: %1").arg(axesArg));
+  }
+
+  const QRegularExpressionMatch plotMatch = kPlotCall.match(normalized);
+  if (plotMatch.hasMatch()) {
+    const QStringList args = splitTopLevelArgs(plotMatch.captured(1).trimmed());
+    if (args.isEmpty() || args.size() > 3) {
+      return finalizeOutput(QStringLiteral("Error: currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\")."));
+    }
+
+    QString expr;
+    SignalGraphWindow* targetWindow = nullptr;
+    QString styleArg;
+    if (args.size() == 1) {
+      expr = args.front();
+    } else if (args.size() == 2) {
+      if (isQuotedStringLiteral(args[1])) {
+        expr = args[0];
+        styleArg = unquoteStringLiteral(args[1]);
+      } else {
+        expr = args[1];
+        std::uint64_t maybeId = 0;
+        if (!resolveHandleId(args.front(), maybeId)) {
+          return finalizeOutput(QStringLiteral("Error: currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\")."));
+        }
+        targetWindow = graphicsManager_.findFigureById(maybeId);
+        if (!targetWindow) {
+          return finalizeOutput(QString("Error: figure handle not found: %1").arg(args.front()));
+        }
+      }
+    } else if (args.size() == 3) {
+      std::uint64_t maybeId = 0;
+      if (!resolveHandleId(args.front(), maybeId)) {
+        return finalizeOutput(QStringLiteral("Error: currently supported forms are plot(x), plot(x,\"style\"), plot(h,x), and plot(h,x,\"style\")."));
+      }
+      targetWindow = graphicsManager_.findFigureById(maybeId);
+      if (!targetWindow) {
+        return finalizeOutput(QString("Error: figure handle not found: %1").arg(args.front()));
+      }
+      expr = args[1];
+      if (!isQuotedStringLiteral(args[2])) {
+        return finalizeOutput(QStringLiteral("Error: plot style must be a quoted string."));
+      }
+      styleArg = unquoteStringLiteral(args[2]);
+    }
+
+    PlotStyleSpec styleSpec;
+    if (!styleArg.isEmpty()) {
+      styleSpec = parsePlotStyleString(styleArg);
+      if (!styleSpec.valid) {
+        return finalizeOutput(QString("Error: invalid plot style: \"%1\"").arg(styleArg));
+      }
+    }
+
+    const QString tmpVar = nextGraphicsTempName();
+    const QString assignExpr = QString("%1=%2").arg(tmpVar, expr);
+    const EvalResult evalResult = engine_.eval(assignExpr.toStdString());
+    if (evalResult.status != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+      engine_.deleteVar(tmpVar.toStdString());
+      return finalizeOutput(QString::fromStdString(evalResult.output).trimmed().isEmpty()
+                                ? QString("Error: failed to evaluate plot expression: %1").arg(expr)
+                                : QString::fromStdString(evalResult.output));
+    }
+
+    auto sig = engine_.getSignalData(tmpVar.toStdString());
+    engine_.deleteVar(tmpVar.toStdString());
+    if (!sig) {
+      return finalizeOutput(QString("Error: plot expression is not plottable: %1").arg(expr));
+    }
+
+    if (!targetWindow) {
+      targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), *sig, false, QString(), false);
+    } else {
+      targetWindow->updateData(*sig);
+      focusWindow(targetWindow);
+      graphicsManager_.markFocused(targetWindow);
+    }
+    if (!sig->isAudio && !sig->channels.empty()) {
+      const int expectedLength = static_cast<int>(sig->channels.front().samples.size());
+      if (const auto xdata = extractRangeXData(expr, expectedLength); xdata.has_value()) {
+        targetWindow->applyXDataToAllLines(*xdata);
+      }
+    }
+    if (!styleArg.isEmpty()) {
+      targetWindow->applyStyleToAllLines(styleSpec.hasColor ? std::optional<QColor>(styleSpec.color) : std::nullopt,
+                                         styleSpec.marker,
+                                         styleSpec.lineStyle);
+    }
+    return finalizeOutput(graphicsHandleText(targetWindow ? targetWindow->graphicsModel().figure().common.id : 0));
+  }
+
+  const QRegularExpressionMatch deleteMatch = kDeleteCall.match(normalized);
+  if (deleteMatch.hasMatch()) {
+    const QString arg = deleteMatch.captured(1).trimmed();
+    if (arg.isEmpty()) {
+      return finalizeOutput(QStringLiteral("Error: delete() requires a graphics handle."));
+    }
+
+    std::uint64_t objectId = 0;
+    QString sourceVar;
+    if (!resolveHandleId(arg, objectId, &sourceVar)) {
+      return finalizeOutput(QString("Error: invalid graphics handle: %1").arg(arg));
+    }
+
+    if (auto* figure = graphicsManager_.findFigureById(objectId)) {
+      const bool deletingCurrent = (graphicsManager_.currentFigureWindow() == figure);
+      if (deletingCurrent) {
+        graphicsManager_.clearCurrentWindow(figure);
+      }
+      figure->close();
+      if (!sourceVar.isEmpty()) {
+        engine_.eval(QString("%1=[]").arg(sourceVar).toStdString());
+      }
+      return finalizeOutput(QStringLiteral("[]"));
+    }
+
+    if (auto* owner = graphicsManager_.findAxesOwner(objectId)) {
+      const bool deletingCurrentAxes = (graphicsManager_.currentFigureWindow() == owner &&
+                                        graphicsManager_.currentAxesId() == objectId);
+      if (!owner->removeAxes(objectId)) {
+        return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+      }
+      if (deletingCurrentAxes) {
+        graphicsManager_.markFocused(owner);
+      }
+      if (!sourceVar.isEmpty()) {
+        engine_.eval(QString("%1=[]").arg(sourceVar).toStdString());
+      }
+      return finalizeOutput(QStringLiteral("[]"));
+    }
+
+    if (auto* owner = graphWindowForLineId(objectId)) {
+      if (!owner->removeLine(objectId)) {
+        return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+      }
+      if (!sourceVar.isEmpty()) {
+        engine_.eval(QString("%1=[]").arg(sourceVar).toStdString());
+      }
+      return finalizeOutput(QStringLiteral("[]"));
+    }
+
+    if (auto* owner = graphWindowForTextId(objectId)) {
+      if (!owner->removeText(objectId)) {
+        return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+      }
+      if (!sourceVar.isEmpty()) {
+        engine_.eval(QString("%1=[]").arg(sourceVar).toStdString());
+      }
+      return finalizeOutput(QStringLiteral("[]"));
+    }
+
+    return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+  }
+
+  const QRegularExpressionMatch lineMatch = kLineCall.match(normalized);
+  if (lineMatch.hasMatch()) {
+    const QStringList args = splitTopLevelArgs(lineMatch.captured(1).trimmed());
+    if (args.isEmpty() || args.size() > 3) {
+      return finalizeOutput(QStringLiteral("Error: supported forms are line(x), line(x,y), line(h,x), and line(h,x,y)."));
+    }
+
+    SignalGraphWindow* targetWindow = nullptr;
+    std::uint64_t targetAxesId = 0;
+    int argIndex = 0;
+    if (args.size() >= 2) {
+      std::uint64_t maybeId = 0;
+      if (resolveHandleId(args.front(), maybeId)) {
+        if (auto* owner = graphicsManager_.findAxesOwner(maybeId)) {
+          targetWindow = owner;
+          targetAxesId = maybeId;
+          argIndex = 1;
+        } else if (auto* figure = graphicsManager_.findFigureById(maybeId)) {
+          targetWindow = figure;
+          if (const auto* currentAxes = figure->graphicsModel().currentAxes()) {
+            targetAxesId = currentAxes->common.id;
+          } else {
+            targetAxesId = figure->addAxes({0.08, 0.18, 0.86, 0.72});
+          }
+          argIndex = 1;
+        }
+      }
+    }
+
+    QString xExpr;
+    QString yExpr;
+    if (args.size() - argIndex == 1) {
+      yExpr = args[argIndex];
+    } else if (args.size() - argIndex == 2) {
+      xExpr = args[argIndex];
+      yExpr = args[argIndex + 1];
+    } else {
+      return finalizeOutput(QStringLiteral("Error: supported forms are line(x), line(x,y), line(h,x), and line(h,x,y)."));
+    }
+
+    auto yVals = evaluateVectorExpr(yExpr);
+    if (!yVals.has_value()) {
+      return finalizeOutput(QString("Error: line data is not a numeric vector: %1").arg(yExpr));
+    }
+
+    QVector<double> xVals;
+    if (xExpr.isEmpty()) {
+      xVals.reserve(yVals->size());
+      for (int i = 0; i < yVals->size(); ++i) {
+        xVals.push_back(i + 1);
+      }
+    } else {
+      auto maybeX = evaluateVectorExpr(xExpr);
+      if (!maybeX.has_value()) {
+        return finalizeOutput(QString("Error: line x data is not a numeric vector: %1").arg(xExpr));
+      }
+      if (maybeX->size() != yVals->size()) {
+        return finalizeOutput(QStringLiteral("Error: x and y for line() must have the same length."));
+      }
+      xVals = *maybeX;
+    }
+
+    if (!targetWindow) {
+      SignalData emptyData;
+      targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), emptyData, false, QString(), false);
+      if (const auto* currentAxes = targetWindow->graphicsModel().currentAxes()) {
+        targetAxesId = currentAxes->common.id;
+      } else {
+        targetAxesId = targetWindow->addAxes({0.08, 0.18, 0.86, 0.72});
+      }
+    }
+
+    const auto lineId = targetWindow->addLine(targetAxesId, xVals, *yVals);
+    if (lineId == 0) {
+      return finalizeOutput(QStringLiteral("Error: failed to create line object."));
+    }
+    focusWindow(targetWindow);
+    graphicsManager_.markFocused(targetWindow);
+    return finalizeOutput(graphicsHandleText(lineId));
+  }
+
+  const QRegularExpressionMatch textMatch = kTextCall.match(normalized);
+  if (textMatch.hasMatch()) {
+    const QStringList args = splitTopLevelArgs(textMatch.captured(1).trimmed());
+    if (args.size() != 3 && args.size() != 4) {
+      return finalizeOutput(QStringLiteral("Error: supported forms are text(x,y,\"text\") and text(h,x,y,\"text\")."));
+    }
+
+    SignalGraphWindow* targetWindow = nullptr;
+    std::uint64_t parentId = 0;
+    int argIndex = 0;
+    if (args.size() == 4) {
+      std::uint64_t maybeId = 0;
+      if (!resolveHandleId(args[0], maybeId)) {
+        return finalizeOutput(QString("Error: invalid text parent handle: %1").arg(args[0]));
+      }
+      if (auto* owner = graphicsManager_.findAxesOwner(maybeId)) {
+        targetWindow = owner;
+        parentId = maybeId;
+      } else if (auto* figure = graphicsManager_.findFigureById(maybeId)) {
+        targetWindow = figure;
+        parentId = maybeId;
+      } else {
+        return finalizeOutput(QString("Error: figure/axes handle not found: %1").arg(args[0]));
+      }
+      argIndex = 1;
+    }
+
+    bool okX = false;
+    bool okY = false;
+    const double posX = args[argIndex].trimmed().toDouble(&okX);
+    const double posY = args[argIndex + 1].trimmed().toDouble(&okY);
+    if (!okX || !okY) {
+      return finalizeOutput(QStringLiteral("Error: text position must be numeric."));
+    }
+    if (!isQuotedStringLiteral(args[argIndex + 2])) {
+      return finalizeOutput(QStringLiteral("Error: text string must be quoted."));
+    }
+    const QString textValue = unquoteStringLiteral(args[argIndex + 2]);
+
+    if (!targetWindow) {
+      targetWindow = graphicsManager_.currentFigureWindow();
+      if (!targetWindow) {
+        targetWindow = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+      }
+      parentId = targetWindow->graphicsModel().figure().common.id;
+    }
+
+    const auto textId = targetWindow->addText(parentId, posX, posY, textValue);
+    if (textId == 0) {
+      return finalizeOutput(QStringLiteral("Error: failed to create text object."));
+    }
+    focusWindow(targetWindow);
+    graphicsManager_.markFocused(targetWindow);
+    return finalizeOutput(graphicsHandleText(textId));
+  }
+
+  const QRegularExpressionMatch figureMatch = kFigureCall.match(normalized);
+  if (!figureMatch.hasMatch()) {
+    return false;
+  }
+
+  const QString arg = figureMatch.captured(1).trimmed();
+  if (arg.isEmpty()) {
+    auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+  }
+
+  if (arg.startsWith('"') && arg.endsWith('"') && arg.size() >= 2) {
+    const QString path = arg.mid(1, arg.size() - 2);
+    if (path.isEmpty() || !variableSupportsSignalDisplay(path)) {
+      return finalizeOutput(QString("Error: variable not plottable: %1").arg(path));
+    }
+    if (auto* existing = graphicsManager_.findNamedFigure(path)) {
+      focusWindow(existing);
+      graphicsManager_.markFocused(existing);
+      return finalizeOutput(graphicsHandleText(existing->graphicsModel().figure().common.id));
+    }
+    openSignalGraphForPath(path);
+    if (auto* current = graphicsManager_.currentFigureWindow()) {
+      return finalizeOutput(graphicsHandleText(current->graphicsModel().figure().common.id));
+    }
+    return finalizeOutput(QStringLiteral("[]"));
+  }
+
+  std::array<double, 4> pos{};
+  if (parseMatlabPosVector(arg, pos)) {
+    auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), matlabFigureRectToQt(pos));
+    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+  }
+
+  std::uint64_t id = 0;
+  if (resolveHandleId(arg, id)) {
+    if (auto* existing = graphicsManager_.findFigureById(id)) {
+      focusWindow(existing);
+      graphicsManager_.markFocused(existing);
+      return finalizeOutput(graphicsHandleText(existing->graphicsModel().figure().common.id));
+    }
+    return finalizeOutput(QString("Error: figure handle not found: %1").arg(arg));
+  }
+
+  return finalizeOutput(QString("Error: invalid figure argument: %1").arg(arg));
 }
 
 void MainWindow::onAsyncPollTick() {
@@ -1506,12 +2598,61 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
     return;
   }
 
+  SignalGraphWindow::CreationOptions options;
+  options.title = path;
+  options.namedPlot = true;
+  options.sourcePath = path;
+
   auto* w = new SignalGraphWindow(
-      path, *sig, nullptr,
+      path, *sig, options, nullptr,
       [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Graph);
   focusWindow(w);
+}
+
+SignalGraphWindow* MainWindow::createEmptyFigureWindow(const QString& title, const QRect& geometry) {
+  SignalData emptyData;
+  SignalGraphWindow::CreationOptions options;
+  options.title = title;
+  options.namedPlot = false;
+
+  auto* w = new SignalGraphWindow(title, emptyData, options);
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  if (geometry.isValid()) {
+    w->setGeometry(geometry);
+  }
+  trackWindow(title, w, WindowKind::Graph, false);
+  focusWindow(w);
+  graphicsManager_.markFocused(w);
+  return w;
+}
+
+SignalGraphWindow* MainWindow::createSignalFigureWindow(const QString& title,
+                                                       const SignalData& data,
+                                                       bool namedPlot,
+                                                       const QString& sourcePath,
+                                                       bool variableBacked) {
+  SignalGraphWindow::CreationOptions options;
+  options.title = title;
+  options.namedPlot = namedPlot;
+  options.sourcePath = sourcePath;
+
+  const QString trackName = variableBacked && !sourcePath.isEmpty() ? sourcePath : title;
+  auto* w = new SignalGraphWindow(
+      trackName,
+      data,
+      options,
+      nullptr,
+      [this, sourcePath, variableBacked, trackName](int viewStart, int viewLen) {
+        const QString fftSource = variableBacked && !sourcePath.isEmpty() ? sourcePath : trackName;
+        return engine_.getSignalFftPowerDb(fftSource.toStdString(), viewStart, viewLen);
+      });
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  trackWindow(trackName, w, WindowKind::Graph, variableBacked);
+  focusWindow(w);
+  graphicsManager_.markFocused(w);
+  return w;
 }
 
 void MainWindow::openPathDetail(const QString& path) {
@@ -1676,15 +2817,23 @@ void MainWindow::openCellMembersForPath(const QString& path) {
   w->show();
 }
 
-void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind kind) {
+void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind kind, bool variableBacked) {
   ScopedWindow s;
   s.varName = varName;
+  s.variableBacked = variableBacked;
   s.scope = engine_.activeContext();
   s.kind = kind;
   s.window = window;
   scopedWindows_.push_back(s);
   window->installEventFilter(this);
-  connect(window, &QObject::destroyed, this, [this, window]() {
+  auto* graphWindow = qobject_cast<SignalGraphWindow*>(window);
+  if (graphWindow) {
+    graphicsManager_.registerWindow(graphWindow);
+  }
+  connect(window, &QObject::destroyed, this, [this, window, graphWindow]() {
+    if (graphWindow) {
+      graphicsManager_.unregisterWindow(graphWindow);
+    }
     if (lastFocusedScopedWindow_ == window) {
       lastFocusedScopedWindow_.clear();
     }
@@ -1723,6 +2872,7 @@ void MainWindow::focusWindow(QWidget* window) const {
 }
 
 void MainWindow::reconcileScopedWindows() {
+  graphicsManager_.reconcile();
   std::unordered_set<std::string> activeNames;
   for (const auto& v : engine_.listVariables()) {
     activeNames.insert(v.name);
@@ -1743,7 +2893,7 @@ void MainWindow::reconcileScopedWindows() {
       rootPos = cellPos;
     }
     const std::string rootName = rootPos == std::string::npos ? fullName : fullName.substr(0, rootPos);
-    if (it->scope == currentScope && activeNames.find(rootName) == activeNames.end()) {
+    if (it->variableBacked && it->scope == currentScope && activeNames.find(rootName) == activeNames.end()) {
       if (it->window) {
         it->window->close();
       }
@@ -1864,6 +3014,9 @@ void MainWindow::closeAllScopedWindowsInCurrentScope() {
 void MainWindow::noteScopedWindowFocus(QWidget* window) {
   if (!window) {
     return;
+  }
+  if (auto* graphWindow = qobject_cast<SignalGraphWindow*>(window)) {
+    graphicsManager_.markFocused(graphWindow);
   }
   const auto currentScope = engine_.activeContext();
   auto it = std::find_if(scopedWindows_.begin(), scopedWindows_.end(), [window, currentScope](const ScopedWindow& entry) {

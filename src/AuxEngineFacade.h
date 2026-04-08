@@ -1,6 +1,7 @@
 #pragma once
 
 #include <auxe/auxe.h>
+#include <QVector>
 #include <optional>
 #include <set>
 #include <string>
@@ -60,6 +61,8 @@ public:
   std::vector<VarSnapshot> listStructMembers(const std::string& path) const;
   std::vector<VarSnapshot> listCellMembers(const std::string& path) const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
+  std::optional<QVector<double>> getNumericVector(const std::string& varName) const;
+  std::optional<double> getScalarValue(const std::string& varName) const;
   std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;
   std::optional<BinaryData> getBinaryData(const std::string& varName) const;
   bool isBinaryVar(const std::string& varName) const;

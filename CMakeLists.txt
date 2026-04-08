@@ -87,6 +87,10 @@ set(AUXLAB2_SOURCES
   src/main.cpp
   src/AuxEngineFacade.h
   src/AuxEngineFacade.cpp
+  src/GraphicsObjects.h
+  src/GraphicsObjects.cpp
+  src/GraphicsManager.h
+  src/GraphicsManager.cpp
   src/CommandConsole.h
   src/CommandConsole.cpp
   src/MainWindow.h

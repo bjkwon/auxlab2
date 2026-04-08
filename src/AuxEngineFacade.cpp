@@ -614,6 +614,61 @@ std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varN
   return data;
 }
 
+std::optional<QVector<double>> AuxEngineFacade::getNumericVector(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return std::nullopt;
+  }
+
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return std::nullopt;
+  }
+
+  if (aux_num_channels(obj) != 1) {
+    return std::nullopt;
+  }
+
+  const size_t len = aux_flatten_channel_length(obj, 0);
+  if (len == 0) {
+    return std::nullopt;
+  }
+
+  QVector<double> values(static_cast<qsizetype>(len));
+  if (aux_flatten_channel(obj, 0, values.data(), len) != len) {
+    return std::nullopt;
+  }
+  return values;
+}
+
+std::optional<double> AuxEngineFacade::getScalarValue(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return std::nullopt;
+  }
+
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return std::nullopt;
+  }
+
+  if (aux_num_channels(obj) != 1) {
+    return std::nullopt;
+  }
+  const size_t len = aux_flatten_channel_length(obj, 0);
+  if (len != 1) {
+    return std::nullopt;
+  }
+
+  double value = 0.0;
+  if (aux_flatten_channel(obj, 0, &value, 1) != 1) {
+    return std::nullopt;
+  }
+  return value;
+}
+
 std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const {
   std::vector<std::vector<double>> out;
   if (!activeCtx_) {

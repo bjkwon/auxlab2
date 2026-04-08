@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AuxEngineFacade.h"
+#include "GraphicsManager.h"
 
 #include <QAudioSink>
 #include <QBuffer>
@@ -48,6 +49,7 @@ private:
 
   struct ScopedWindow {
     QString varName;
+    bool variableBacked = true;
     auxContext* scope = nullptr;
     WindowKind kind = WindowKind::Graph;
     QPointer<QWidget> window;
@@ -58,6 +60,7 @@ private:
   void connectSignals();
 
   void runCommand(const QString& cmd);
+  bool tryHandleGraphicsCommand(const QString& cmd, QString& output);
   void onAsyncPollTick();
   void updateCommandPrompt();
   QString selectedVarName() const;
@@ -86,12 +89,18 @@ private:
   void openSignalTableForSelected();
   void playSelectedAudioFromVarBox();
   void openSignalGraphForPath(const QString& path);
+  SignalGraphWindow* createEmptyFigureWindow(const QString& title, const QRect& geometry = QRect());
+  SignalGraphWindow* createSignalFigureWindow(const QString& title,
+                                             const SignalData& data,
+                                             bool namedPlot,
+                                             const QString& sourcePath,
+                                             bool variableBacked);
   void openPathDetail(const QString& path);
   void playAudioForPath(const QString& path);
   void openStructMembersForPath(const QString& path);
   void openCellMembersForPath(const QString& path);
 
-  void trackWindow(const QString& varName, QWidget* window, WindowKind kind);
+  void trackWindow(const QString& varName, QWidget* window, WindowKind kind, bool variableBacked = true);
   SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
   void focusWindow(QWidget* window) const;
   void reconcileScopedWindows();
@@ -134,6 +143,7 @@ private:
   void showAboutDialog();
 
   AuxEngineFacade engine_;
+  GraphicsManager graphicsManager_;
 
   CommandConsole* commandBox_ = nullptr;
   QTreeWidget* audioVariableBox_ = nullptr;

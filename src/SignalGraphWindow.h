@@ -1,10 +1,12 @@
 #pragma once
 
 #include "AuxEngineFacade.h"
+#include "GraphicsObjects.h"
 
 #include <QAudioSink>
 #include <QBuffer>
 #include <QImage>
+#include <optional>
 #include <QTimer>
 #include <QWidget>
 #include <functional>
@@ -12,6 +14,16 @@
 class SignalGraphWindow : public QWidget {
   Q_OBJECT
 public:
+  struct CreationOptions {
+    CreationOptions() : namedPlot(false) {}
+    CreationOptions(QString titleIn, bool namedPlotIn, QString sourcePathIn)
+        : title(std::move(titleIn)), namedPlot(namedPlotIn), sourcePath(std::move(sourcePathIn)) {}
+
+    QString title;
+    bool namedPlot;
+    QString sourcePath;
+  };
+
   using FftProvider = std::function<std::vector<std::vector<double>>(int, int)>;
   struct FftPaneLayout {
     int channel = 0;
@@ -20,18 +32,30 @@ public:
     QRect leftMargin;
   };
 
-  enum class StereoMode {
-    Vertical = 0,
-    OverlayBlueRed = 1,
-    OverlayRedBlue = 2,
-  };
-
-  SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent = nullptr, FftProvider fftProvider = {});
+  SignalGraphWindow(const QString& varName,
+                    const SignalData& data,
+                    CreationOptions options = CreationOptions(),
+                    QWidget* parent = nullptr,
+                    FftProvider fftProvider = {});
   ~SignalGraphWindow() override;
 
   QString varName() const;
   void setWorkspaceActive(bool active);
   void updateData(const SignalData& data);
+  std::uint64_t addAxes(const std::array<double, 4>& pos);
+  std::uint64_t addLine(std::uint64_t axesId, const QVector<double>& xdata, const QVector<double>& ydata);
+  std::uint64_t addText(std::uint64_t parentId, double x, double y, const QString& text);
+  bool selectAxes(std::uint64_t axesId);
+  bool removeAxes(std::uint64_t axesId);
+  bool removeLine(std::uint64_t lineId);
+  bool removeText(std::uint64_t textId);
+  void applyStyleToAllLines(const std::optional<QColor>& color,
+                            const QString& marker,
+                            const QString& lineStyle);
+  void applyXDataToAllLines(const QVector<double>& xdata);
+  const GraphicsFigureModel& graphicsModel() const { return graphics_; }
+  GraphicsFigureModel& graphicsModelMutable() { return graphics_; }
+  void refreshGraphics();
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -48,7 +72,8 @@ private:
     int end = 0;
   };
 
-  void drawChannel(QPainter& p, const QRect& area, int channel, const QColor& color, bool overlay);
+  QRect axesRectForPlot(const GraphicsAxesHandle& axes, const QRect& plot) const;
+  void drawLine(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes, const GraphicsLineHandle& line);
   void cycleStereoMode();
   void zoomIn();
   void zoomOut();
@@ -77,6 +102,8 @@ private:
 
   QString varName_;
   SignalData data_;
+  CreationOptions options_;
+  GraphicsFigureModel graphics_;
   bool workspaceActive_ = true;
 
   int viewStart_ = 0;
@@ -94,7 +121,6 @@ private:
   double hoverFftValue_ = 0.0;
   double hoverFftFreqHz_ = 0.0;
 
-  StereoMode stereoMode_ = StereoMode::Vertical;
   bool showFftOverlay_ = false;
   bool fftComputed_ = false;
   FftProvider fftProvider_;
@@ -125,6 +151,6 @@ private:
   int cachedViewLen_ = -1;
   double cachedYMin_ = 0.0;
   double cachedYMax_ = 0.0;
-  StereoMode cachedStereoMode_ = StereoMode::Vertical;
+  bool cachedStereoOverlay_ = false;
   bool cachedWorkspaceActive_ = true;
 };

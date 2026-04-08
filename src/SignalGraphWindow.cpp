@@ -16,6 +16,73 @@
 namespace {
 constexpr double kRmsDbOffset = 3.0103;
 
+Qt::PenStyle penStyleForLine(const QString& lineStyle) {
+  if (lineStyle == "--") {
+    return Qt::DashLine;
+  }
+  if (lineStyle == ":") {
+    return Qt::DotLine;
+  }
+  if (lineStyle == "-.") {
+    return Qt::DashDotLine;
+  }
+  if (lineStyle == "none") {
+    return Qt::NoPen;
+  }
+  return Qt::SolidLine;
+}
+
+bool hasMarker(const QString& marker) {
+  const QString trimmed = marker.trimmed();
+  return !trimmed.isEmpty();
+}
+
+void drawMarker(QPainter& p, const QPointF& pt, const QString& marker, int markerSize) {
+  const QString m = marker.trimmed();
+  if (m.isEmpty()) {
+    return;
+  }
+
+  const qreal r = std::max(2, markerSize);
+  if (m == "o") {
+    p.drawEllipse(pt, r, r);
+  } else if (m == ".") {
+    p.drawEllipse(pt, 1.5, 1.5);
+  } else if (m == "+") {
+    p.drawLine(QPointF(pt.x() - r, pt.y()), QPointF(pt.x() + r, pt.y()));
+    p.drawLine(QPointF(pt.x(), pt.y() - r), QPointF(pt.x(), pt.y() + r));
+  } else if (m == "x") {
+    p.drawLine(QPointF(pt.x() - r, pt.y() - r), QPointF(pt.x() + r, pt.y() + r));
+    p.drawLine(QPointF(pt.x() - r, pt.y() + r), QPointF(pt.x() + r, pt.y() - r));
+  } else if (m == "*") {
+    p.drawLine(QPointF(pt.x() - r, pt.y()), QPointF(pt.x() + r, pt.y()));
+    p.drawLine(QPointF(pt.x(), pt.y() - r), QPointF(pt.x(), pt.y() + r));
+    p.drawLine(QPointF(pt.x() - r * 0.7, pt.y() - r * 0.7), QPointF(pt.x() + r * 0.7, pt.y() + r * 0.7));
+    p.drawLine(QPointF(pt.x() - r * 0.7, pt.y() + r * 0.7), QPointF(pt.x() + r * 0.7, pt.y() - r * 0.7));
+  } else if (m == "s") {
+    p.drawRect(QRectF(pt.x() - r, pt.y() - r, 2 * r, 2 * r));
+  } else if (m == "d") {
+    QPolygonF poly;
+    poly << QPointF(pt.x(), pt.y() - r) << QPointF(pt.x() + r, pt.y())
+         << QPointF(pt.x(), pt.y() + r) << QPointF(pt.x() - r, pt.y());
+    p.drawPolygon(poly);
+  } else if (m == "^" || m == "v" || m == ">" || m == "<") {
+    QPolygonF poly;
+    if (m == "^") {
+      poly << QPointF(pt.x(), pt.y() - r) << QPointF(pt.x() + r, pt.y() + r) << QPointF(pt.x() - r, pt.y() + r);
+    } else if (m == "v") {
+      poly << QPointF(pt.x() - r, pt.y() - r) << QPointF(pt.x() + r, pt.y() - r) << QPointF(pt.x(), pt.y() + r);
+    } else if (m == ">") {
+      poly << QPointF(pt.x() - r, pt.y() - r) << QPointF(pt.x() + r, pt.y()) << QPointF(pt.x() - r, pt.y() + r);
+    } else {
+      poly << QPointF(pt.x() + r, pt.y() - r) << QPointF(pt.x() - r, pt.y()) << QPointF(pt.x() + r, pt.y() + r);
+    }
+    p.drawPolygon(poly);
+  } else {
+    p.drawEllipse(pt, r, r);
+  }
+}
+
 int timelineOffsetSamples(const SignalData& data) {
   if (!data.isAudio || data.sampleRate <= 0) {
     return 0;
@@ -102,9 +169,22 @@ QString formatSecondsCompact(double sec) {
 }
 }  // namespace
 
-SignalGraphWindow::SignalGraphWindow(const QString& varName, const SignalData& data, QWidget* parent, FftProvider fftProvider)
-    : QWidget(parent), varName_(varName), data_(data), fftProvider_(std::move(fftProvider)) {
-  setWindowTitle(QString("Signal Graph - %1").arg(varName_));
+SignalGraphWindow::SignalGraphWindow(const QString& varName,
+                                     const SignalData& data,
+                                     CreationOptions options,
+                                     QWidget* parent,
+                                     FftProvider fftProvider)
+    : QWidget(parent),
+      varName_(varName),
+      data_(data),
+      options_(options),
+      graphics_(GraphicsFigureModel::createSignalFigure(
+          options.title.isEmpty() ? QString("Signal Graph - %1").arg(varName_) : options.title,
+          data,
+          options.namedPlot,
+          options.sourcePath)),
+      fftProvider_(std::move(fftProvider)) {
+  setWindowTitle(graphics_.figure().title);
   resize(900, 460);
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
@@ -151,6 +231,8 @@ void SignalGraphWindow::updateData(const SignalData& data) {
       (oldTotalLen > 0 && viewStart_ <= 1 && oldViewEnd >= oldTotalLen - 1);
 
   data_ = data;
+  graphics_.updateSignalData(data_);
+  setWindowTitle(graphics_.figure().title);
   ++dataSerial_;
   fftComputed_ = false;
   fftDb_.clear();
@@ -181,9 +263,95 @@ void SignalGraphWindow::updateData(const SignalData& data) {
   update();
 }
 
+std::uint64_t SignalGraphWindow::addAxes(const std::array<double, 4>& pos) {
+  const auto axesId = graphics_.addAxes(pos);
+  invalidateStaticLayer();
+  update();
+  return axesId;
+}
+
+std::uint64_t SignalGraphWindow::addLine(std::uint64_t axesId, const QVector<double>& xdata, const QVector<double>& ydata) {
+  const auto lineId = graphics_.addLine(axesId, xdata, ydata);
+  if (lineId == 0) {
+    return 0;
+  }
+  viewStart_ = 0;
+  viewLen_ = std::max(viewLen_, static_cast<int>(xdata.size()));
+  updateYRange();
+  invalidateStaticLayer();
+  update();
+  return lineId;
+}
+
+std::uint64_t SignalGraphWindow::addText(std::uint64_t parentId, double x, double y, const QString& text) {
+  const auto textId = graphics_.addText(parentId, x, y, text);
+  if (textId == 0) {
+    return 0;
+  }
+  invalidateStaticLayer();
+  update();
+  return textId;
+}
+
+bool SignalGraphWindow::selectAxes(std::uint64_t axesId) {
+  if (!graphics_.setCurrentAxes(axesId)) {
+    return false;
+  }
+  update();
+  return true;
+}
+
+bool SignalGraphWindow::removeAxes(std::uint64_t axesId) {
+  if (!graphics_.removeAxes(axesId)) {
+    return false;
+  }
+  invalidateStaticLayer();
+  update();
+  return true;
+}
+
+bool SignalGraphWindow::removeLine(std::uint64_t lineId) {
+  if (!graphics_.removeLine(lineId)) {
+    return false;
+  }
+  updateYRange();
+  invalidateStaticLayer();
+  update();
+  return true;
+}
+
+bool SignalGraphWindow::removeText(std::uint64_t textId) {
+  if (!graphics_.removeText(textId)) {
+    return false;
+  }
+  invalidateStaticLayer();
+  update();
+  return true;
+}
+
+void SignalGraphWindow::applyStyleToAllLines(const std::optional<QColor>& color,
+                                             const QString& marker,
+                                             const QString& lineStyle) {
+  graphics_.applyStyleToAllLines(color, marker, lineStyle);
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::applyXDataToAllLines(const QVector<double>& xdata) {
+  graphics_.applyXDataToAllLines(xdata);
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::refreshGraphics() {
+  updateYRange();
+  invalidateStaticLayer();
+  update();
+}
+
 void SignalGraphWindow::paintEvent(QPaintEvent*) {
   QPainter p(this);
-  p.fillRect(rect(), QColor(212, 212, 196));
+  p.fillRect(rect(), graphics_.figure().common.color);
 
   const QRect plot = plotRect();
   ensureStaticLayer(plot);
@@ -371,36 +539,59 @@ void SignalGraphWindow::leaveEvent(QEvent* event) {
   QWidget::leaveEvent(event);
 }
 
-void SignalGraphWindow::drawChannel(QPainter& p, const QRect& area, int channel, const QColor& color, bool) {
-  if (channel >= static_cast<int>(data_.channels.size())) {
-    return;
-  }
-  const auto& src = data_.channels[static_cast<size_t>(channel)].samples;
-  if (src.empty() || viewLen_ <= 1) {
+QRect SignalGraphWindow::axesRectForPlot(const GraphicsAxesHandle& axes, const QRect& plot) const {
+  const auto& pos = axes.common.pos;
+  const int left = plot.left() + static_cast<int>(std::llround(pos[0] * plot.width()));
+  const int width = static_cast<int>(std::llround(pos[2] * plot.width()));
+  const int height = static_cast<int>(std::llround(pos[3] * plot.height()));
+  const int bottom = plot.bottom() - static_cast<int>(std::llround(pos[1] * plot.height()));
+  const int top = bottom - height;
+  return QRect(left, top, width, height);
+}
+
+void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes, const GraphicsLineHandle& line) {
+  const QVector<double>& xdata = line.xdata;
+  const QVector<double>& ydata = line.ydata;
+  if (ydata.isEmpty() || xdata.isEmpty() || xdata.size() != ydata.size() || viewLen_ <= 0) {
     return;
   }
 
-  const int offset = timelineOffsetSamples(data_);
-  const int totalLen = std::max(1, offset + static_cast<int>(src.size()));
-  const int from = std::clamp(viewStart_, 0, totalLen - 1);
-  const int to = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
+  const double xmin = axes.xlim[0];
+  const double xmax = axes.xlim[1];
+  const double yminAxis = axes.ylim[0];
+  const double ymaxAxis = axes.ylim[1];
+  const double xspan = std::max(1e-12, xmax - xmin);
+  const double yspan = std::max(1e-12, ymaxAxis - yminAxis);
+
+  int from = -1;
+  int to = -1;
+  for (int i = 0; i < xdata.size(); ++i) {
+    if (xdata[i] >= xmin && xdata[i] <= xmax) {
+      if (from < 0) {
+        from = i;
+      }
+      to = i + 1;
+    }
+  }
+  if (from < 0 || to <= from) {
+    return;
+  }
 
   p.setRenderHint(QPainter::Antialiasing, false);
-  p.setPen(QPen(color, 1));
+  QPen pen(line.common.color, std::max(1, line.lineWidth));
+  pen.setStyle(penStyleForLine(line.lineStyle));
+  p.setPen(pen);
 
   const int width = std::max(1, area.width());
   const double samplesPerPixel = static_cast<double>(to - from) / width;
-  if (samplesPerPixel <= 1.0) {
+  if (samplesPerPixel <= 1.0 && pen.style() != Qt::NoPen) {
     QPainterPath path;
     bool first = true;
+    QVector<QPointF> markerPoints;
     for (int i = from; i < to; ++i) {
-      const int di = i - offset;
-      if (di < 0 || di >= static_cast<int>(src.size())) {
-        continue;
-      }
-      const double xNorm = static_cast<double>(i - from) / std::max(1, to - from - 1);
-      const double y = src[static_cast<size_t>(di)];
-      const double yNorm = (y - yMin_) / std::max(1e-12, (yMax_ - yMin_));
+      const double xNorm = (xdata[i] - xmin) / xspan;
+      const double y = ydata[i];
+      const double yNorm = (y - yminAxis) / yspan;
       const double px = area.left() + xNorm * area.width();
       const double py = area.bottom() - yNorm * area.height();
       if (first) {
@@ -409,35 +600,57 @@ void SignalGraphWindow::drawChannel(QPainter& p, const QRect& area, int channel,
       } else {
         path.lineTo(px, py);
       }
+      if (hasMarker(line.marker)) {
+        markerPoints.push_back(QPointF(px, py));
+      }
     }
     p.drawPath(path);
+    if (hasMarker(line.marker)) {
+      const int markerCount = static_cast<int>(markerPoints.size());
+      const int step = std::max(1, markerCount / 40);
+      for (int i = 0; i < markerCount; i += step) {
+        drawMarker(p, markerPoints[i], line.marker, line.markerSize);
+      }
+    }
     return;
   }
 
+  QVector<QPointF> markerPoints;
   for (int x = 0; x < width; ++x) {
-    const int s0 = from + static_cast<int>(x * samplesPerPixel);
-    const int s1 = std::min(to, from + static_cast<int>((x + 1) * samplesPerPixel));
-    if (s0 >= s1) {
-      continue;
-    }
-    const int d0 = std::max(0, s0 - offset);
-    const int d1 = std::min(static_cast<int>(src.size()), s1 - offset);
-    if (d0 >= d1) {
-      continue;
-    }
+    const double binStart = xmin + (xspan * x) / width;
+    const double binEnd = xmin + (xspan * (x + 1)) / width;
     double vmin = std::numeric_limits<double>::max();
     double vmax = std::numeric_limits<double>::lowest();
-    for (int i = d0; i < d1; ++i) {
-      const double v = src[static_cast<size_t>(i)];
+    bool any = false;
+    for (int i = from; i < to; ++i) {
+      if (xdata[i] < binStart || xdata[i] > binEnd) {
+        continue;
+      }
+      const double v = ydata[i];
       vmin = std::min(vmin, v);
       vmax = std::max(vmax, v);
+      any = true;
     }
-    const double y0Norm = (vmin - yMin_) / std::max(1e-12, (yMax_ - yMin_));
-    const double y1Norm = (vmax - yMin_) / std::max(1e-12, (yMax_ - yMin_));
+    if (!any) {
+      continue;
+    }
+    const double y0Norm = (vmin - yminAxis) / yspan;
+    const double y1Norm = (vmax - yminAxis) / yspan;
     const int px = area.left() + x;
     const int py0 = area.bottom() - static_cast<int>(y0Norm * area.height());
     const int py1 = area.bottom() - static_cast<int>(y1Norm * area.height());
-    p.drawLine(px, py0, px, py1);
+    if (pen.style() != Qt::NoPen) {
+      p.drawLine(px, py0, px, py1);
+    }
+    if (hasMarker(line.marker) && (x % std::max(1, width / 30) == 0)) {
+      const int midY = (py0 + py1) / 2;
+      markerPoints.push_back(QPointF(px, midY));
+    }
+  }
+  if (hasMarker(line.marker)) {
+    for (const auto& point : markerPoints) {
+      drawMarker(p, point, line.marker, line.markerSize);
+    }
   }
 }
 
@@ -445,13 +658,7 @@ void SignalGraphWindow::cycleStereoMode() {
   if (data_.channels.size() < 2) {
     return;
   }
-  if (stereoMode_ == StereoMode::Vertical) {
-    stereoMode_ = StereoMode::OverlayBlueRed;
-  } else if (stereoMode_ == StereoMode::OverlayBlueRed) {
-    stereoMode_ = StereoMode::OverlayRedBlue;
-  } else {
-    stereoMode_ = StereoMode::Vertical;
-  }
+  graphics_.setStereoOverlay(!graphics_.stereoOverlay());
   invalidateStaticLayer();
   update();
 }
@@ -641,32 +848,29 @@ void SignalGraphWindow::resizeEvent(QResizeEvent* event) {
 }
 
 void SignalGraphWindow::updateYRange() {
-  if (data_.channels.empty() || data_.channels.front().samples.empty()) {
-    yMin_ = -1.0;
-    yMax_ = 1.0;
-    return;
-  }
-
   if (data_.isAudio) {
+    if (data_.channels.empty() || data_.channels.front().samples.empty()) {
+      yMin_ = -1.0;
+      yMax_ = 1.0;
+      return;
+    }
     yMin_ = -1.0;
     yMax_ = 1.0;
     return;
   }
 
-  const int offset = timelineOffsetSamples(data_);
-  const int totalLen = std::max(1, totalTimelineSamples(data_));
-  const int from = std::clamp(viewStart_, 0, totalLen - 1);
-  const int end = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
   yMin_ = std::numeric_limits<double>::max();
   yMax_ = std::numeric_limits<double>::lowest();
   bool any = false;
-  for (const auto& ch : data_.channels) {
+  for (const auto& line : graphics_.lines()) {
+    if (line.ydata.isEmpty()) {
+      continue;
+    }
+    const int totalLen = line.ydata.size();
+    const int from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
+    const int end = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
     for (int i = from; i < end; ++i) {
-      const int di = i - offset;
-      if (di < 0 || di >= static_cast<int>(ch.samples.size())) {
-        continue;
-      }
-      const double v = ch.samples[static_cast<size_t>(di)];
+      const double v = line.ydata[i];
       yMin_ = std::min(yMin_, v);
       yMax_ = std::max(yMax_, v);
       any = true;
@@ -701,7 +905,7 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
                             cachedViewLen_ != viewLen_ ||
                             std::fabs(cachedYMin_ - yMin_) > 1e-12 ||
                             std::fabs(cachedYMax_ - yMax_) > 1e-12 ||
-                            cachedStereoMode_ != stereoMode_ ||
+                            cachedStereoOverlay_ != graphics_.stereoOverlay() ||
                             cachedWorkspaceActive_ != workspaceActive_ ||
                             staticPlotRect_ != plot;
   if (!needsRebuild) {
@@ -709,12 +913,8 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
   }
 
   staticLayer_ = QImage(size(), QImage::Format_ARGB32_Premultiplied);
-  staticLayer_.fill(QColor(212, 212, 196));
+  staticLayer_.fill(graphics_.figure().common.color);
   QPainter p(&staticLayer_);
-
-  p.fillRect(plot, QColor(188, 196, 190));
-  p.setPen(QColor(40, 40, 40));
-  p.drawRect(plot);
 
   if (!workspaceActive_) {
     p.setPen(Qt::NoPen);
@@ -722,19 +922,35 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
     p.drawRect(plot);
     p.setPen(Qt::white);
     p.drawText(plot, Qt::AlignCenter, "Inactive (different workspace scope)");
-  } else if (data_.channels.empty() || data_.channels.front().samples.empty()) {
+  } else if (graphics_.lines().empty()) {
     p.setPen(Qt::white);
     p.drawText(plot, Qt::AlignCenter, "No signal data");
   } else {
+    const GraphicsAxesHandle* frameAxes = nullptr;
+    const GraphicsLineHandle* frameLine = nullptr;
+    for (const auto& axes : graphics_.axes()) {
+      if (axes.common.visible) {
+        frameAxes = &axes;
+        break;
+      }
+    }
+    const QRect frameRect = frameAxes ? axesRectForPlot(*frameAxes, plot) : plot;
+    if (frameAxes) {
+      const auto visibleLines = graphics_.linesForAxes(frameAxes->common.id);
+      if (!visibleLines.empty()) {
+        frameLine = visibleLines.front();
+      }
+    }
+
     const int xTickCount = 7;
     const int yTickCount = 5;
-    const int xFrom = viewStart_;
-    const int xTo = viewStart_ + std::max(1, viewLen_) - 1;
     const bool xIsTime = data_.isAudio && data_.sampleRate > 0;
-    const double xStartVal = xIsTime ? (static_cast<double>(xFrom) / data_.sampleRate) : static_cast<double>(xFrom);
-    const double xEndVal = xIsTime ? (static_cast<double>(xTo) / data_.sampleRate) : static_cast<double>(xTo);
+    const double xStartVal = frameAxes ? frameAxes->xlim[0] : 0.0;
+    const double xEndVal = frameAxes ? frameAxes->xlim[1] : 1.0;
     const double xSpan = std::max(1e-12, xEndVal - xStartVal);
-    const double ySpan = std::max(1e-12, yMax_ - yMin_);
+    const double yStartVal = frameAxes ? frameAxes->ylim[0] : yMin_;
+    const double yEndVal = frameAxes ? frameAxes->ylim[1] : yMax_;
+    const double ySpan = std::max(1e-12, yEndVal - yStartVal);
     const int yDigits = ySpan < 0.1 ? 4 : (ySpan < 1.0 ? 3 : 2);
     std::vector<double> xTicks;
     xTicks.reserve(10);
@@ -784,60 +1000,77 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       xTicks.swap(thinned);
     }
 
-    p.setPen(QColor(112, 120, 112));
-    for (double tick : xTicks) {
-      const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
-      const int x = plot.left() + static_cast<int>(std::llround(frac * plot.width()));
-      p.drawLine(x, plot.top(), x, plot.bottom());
+    if (frameAxes && frameAxes->xgrid) {
+      p.setPen(QColor(112, 120, 112));
+      for (double tick : xTicks) {
+        const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+        const int x = frameRect.left() + static_cast<int>(std::llround(frac * frameRect.width()));
+        p.drawLine(x, frameRect.top(), x, frameRect.bottom());
+      }
     }
-    for (int i = 0; i < yTickCount; ++i) {
-      const int y = plot.bottom() - (i * plot.height()) / (yTickCount - 1);
-      p.drawLine(plot.left(), y, plot.right(), y);
-    }
-
-    const bool stereo = data_.channels.size() >= 2;
-    if (stereo && stereoMode_ == StereoMode::Vertical) {
-      QRect top = plot;
-      top.setHeight(plot.height() / 2 - 2);
-      QRect bottom = plot;
-      bottom.setTop(top.bottom() + 4);
-      drawChannel(p, top, 0, QColor(28, 62, 178), false);
-      drawChannel(p, bottom, 1, QColor(255, 86, 86), false);
-    } else {
-      bool blueOnTop = stereoMode_ != StereoMode::OverlayRedBlue;
-      if (blueOnTop) {
-        drawChannel(p, plot, 1, QColor(255, 86, 86, 170), true);
-        drawChannel(p, plot, 0, QColor(28, 62, 178), true);
-      } else {
-        drawChannel(p, plot, 0, QColor(28, 62, 178, 170), true);
-        drawChannel(p, plot, 1, QColor(255, 86, 86), true);
+    if (frameAxes && frameAxes->ygrid) {
+      p.setPen(QColor(112, 120, 112));
+      for (int i = 0; i < yTickCount; ++i) {
+        const int y = frameRect.bottom() - (i * frameRect.height()) / (yTickCount - 1);
+        p.drawLine(frameRect.left(), y, frameRect.right(), y);
       }
     }
 
-    p.setPen(QColor(26, 26, 26));
-    const QString xLabel = data_.isAudio ? "Time (s)" : "Index";
-    p.drawText(QRect(plot.left(), plot.bottom() + 28, plot.width(), 20), Qt::AlignCenter, xLabel);
+    for (const auto& axes : graphics_.axes()) {
+      if (!axes.common.visible) {
+        continue;
+      }
+      const QRect axesRect = axesRectForPlot(axes, plot);
+      p.fillRect(axesRect, axes.common.color);
+      if (axes.box) {
+        p.setPen(QPen(QColor(40, 40, 40), std::max(1, axes.lineWidth)));
+        p.drawRect(axesRect);
+      }
+      for (const auto* line : graphics_.linesForAxes(axes.common.id)) {
+        drawLine(p, axesRect, axes, *line);
+      }
+    }
+
+    p.setPen(QColor(24, 24, 24));
+    for (const auto& text : graphics_.texts()) {
+      if (!text.common.visible || text.stringValue.isEmpty()) {
+        continue;
+      }
+      QRect parentRect = plot;
+      if (text.common.parentId != graphics_.figure().common.id) {
+        auto axIt = std::find_if(graphics_.axes().begin(), graphics_.axes().end(), [&text](const GraphicsAxesHandle& axes) {
+          return axes.common.id == text.common.parentId;
+        });
+        if (axIt == graphics_.axes().end() || !axIt->common.visible) {
+          continue;
+        }
+        parentRect = axesRectForPlot(*axIt, plot);
+      }
+      const int px = parentRect.left() + static_cast<int>(std::llround(text.common.pos[0] * parentRect.width()));
+      const int py = parentRect.bottom() - static_cast<int>(std::llround(text.common.pos[1] * parentRect.height()));
+      p.drawText(QPoint(px, py), text.stringValue);
+    }
 
     p.setPen(QColor(36, 36, 36));
     for (double tick : xTicks) {
       const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
-      const int x = plot.left() + static_cast<int>(std::llround(frac * plot.width()));
-      p.drawLine(x, plot.bottom(), x, plot.bottom() + 4);
+      const int x = frameRect.left() + static_cast<int>(std::llround(frac * frameRect.width()));
+      p.drawLine(x, frameRect.bottom(), x, frameRect.bottom() + 4);
       QString label;
       if (xIsTime) {
         label = formatSecondsCompact(tick);
       } else {
         label = QString::number(static_cast<int>(std::llround(tick)));
       }
-      p.drawText(QRect(x - 42, plot.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
+      p.drawText(QRect(x - 42, frameRect.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
     }
 
     for (int i = 0; i < yTickCount; ++i) {
-      const int y = plot.bottom() - (i * plot.height()) / (yTickCount - 1);
-      const double v = yMin_ + ((yMax_ - yMin_) * i) / (yTickCount - 1);
-      p.drawLine(plot.left() - 4, y, plot.left(), y);
+      const int y = frameRect.bottom() - (i * frameRect.height()) / (yTickCount - 1);
+      const double v = yStartVal + ((yEndVal - yStartVal) * i) / (yTickCount - 1);
+      p.drawLine(frameRect.left() - 4, y, frameRect.left(), y);
       const QString label = QString::number(v, 'f', yDigits);
-      p.drawText(QRect(2, y - 8, plot.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, label);
+      p.drawText(QRect(2, y - 8, frameRect.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, label);
     }
   }
 
@@ -848,7 +1081,7 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
   cachedViewLen_ = viewLen_;
   cachedYMin_ = yMin_;
   cachedYMax_ = yMax_;
-  cachedStereoMode_ = stereoMode_;
+  cachedStereoOverlay_ = graphics_.stereoOverlay();
   cachedWorkspaceActive_ = workspaceActive_;
 }
 
@@ -882,7 +1115,7 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   }
 
   const QRect plot = plotRect();
-  if (!plot.contains(pt) || data_.channels.empty()) {
+  if (!plot.contains(pt) || graphics_.lines().empty()) {
     hoverActive_ = false;
     hoverSample_ = -1;
     return;
@@ -891,19 +1124,19 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverActive_ = true;
   hoverSample_ = xToSample(pt);
 
-  int channel = 0;
-  const bool stereoVertical = data_.channels.size() >= 2 && stereoMode_ == StereoMode::Vertical;
-  if (stereoVertical) {
-    QRect top = plot;
-    top.setHeight(plot.height() / 2 - 2);
-    channel = top.contains(pt) ? 0 : 1;
+  const auto* axes = graphics_.leftChannelAxes();
+  if (!axes) {
+    hoverValue_ = 0.0;
+    return;
   }
-
-  const int offset = timelineOffsetSamples(data_);
-  const int di = hoverSample_ - offset;
-  const auto& src = data_.channels[static_cast<size_t>(channel)].samples;
-  if (di >= 0 && di < static_cast<int>(src.size())) {
-    hoverValue_ = src[static_cast<size_t>(di)];
+  const auto lines = graphics_.linesForAxes(axes->common.id);
+  if (lines.empty()) {
+    hoverValue_ = 0.0;
+    return;
+  }
+  const auto* line = lines.front();
+  if (line && hoverSample_ >= 0 && hoverSample_ < line->ydata.size()) {
+    hoverValue_ = line->ydata[hoverSample_];
   } else {
     hoverValue_ = 0.0;
   }
@@ -918,7 +1151,24 @@ QString SignalGraphWindow::formatTimeValue(int sample, bool withSuffix) const {
     }
     return withSuffix ? body + "s" : body;
   }
-  return withSuffix ? QString("%1i").arg(sample) : QString::number(sample);
+
+  const auto* axes = graphics_.leftChannelAxes();
+  if (axes) {
+    const auto lines = graphics_.linesForAxes(axes->common.id);
+    if (!lines.empty()) {
+      const auto* line = lines.front();
+      if (line && sample >= 0 && sample < line->xdata.size()) {
+        const double x = line->xdata[sample];
+        const double rounded = std::round(x);
+        if (std::fabs(x - rounded) < 1e-9) {
+          return QString::number(static_cast<long long>(rounded));
+        }
+        return QString::number(x, 'g', 8);
+      }
+    }
+  }
+
+  return QString::number(sample + 1);
 }
 
 QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
