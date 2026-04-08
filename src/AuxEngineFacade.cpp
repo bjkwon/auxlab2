@@ -29,7 +29,7 @@ constexpr uint16_t kTypeString = 0x0030;
 constexpr uint16_t kTypeByte = 0x0050;
 constexpr uint16_t kTypeCell = 0x1000;
 constexpr uint16_t kTypeStrut = 0x2000;
-constexpr uint16_t kTypeStruts = 0x4000;
+constexpr uint16_t kTypeHandle = 0x4000;
 constexpr double kRmsDbOffset = 3.0103;
 
 std::string trimAscii(std::string s) {
@@ -56,7 +56,10 @@ std::string shortTypeTag(uint16_t type) {
   if ((type & kTypeCell) != 0) {
     return "CELL";
   }
-  if ((type & (kTypeStrut | kTypeStruts)) != 0) {
+  if ((type & kTypeHandle) != 0) {
+    return "HNDL";
+  }
+  if ((type & kTypeStrut) != 0) {
     return "STRC";
   }
   if ((type & 0xFFF0) == kTypeString) {
@@ -732,7 +735,7 @@ bool AuxEngineFacade::isStructVar(const std::string& varName) const {
     return false;
   }
   const uint16_t type = aux_type(obj);
-  return (type & (kTypeStrut | kTypeStruts)) != 0;
+  return (type & (kTypeStrut | kTypeHandle)) != 0;
 }
 
 bool AuxEngineFacade::isCellVar(const std::string& varName) const {
