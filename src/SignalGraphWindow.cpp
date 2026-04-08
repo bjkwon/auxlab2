@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QScreen>
 
 #include <algorithm>
 #include <cmath>
@@ -95,6 +96,32 @@ int totalTimelineSamples(const SignalData& data) {
     return 0;
   }
   return timelineOffsetSamples(data) + static_cast<int>(data.channels.front().samples.size());
+}
+
+std::array<double, 4> qtRectToMatlabFigurePos(const QRect& rect) {
+  const QRect screen = QGuiApplication::primaryScreen()
+                           ? QGuiApplication::primaryScreen()->availableGeometry()
+                           : QRect(0, 0, 1440, 900);
+  const int x = rect.x();
+  const int width = rect.width();
+  const int height = rect.height();
+  const int yBottom = screen.y() + screen.height() - rect.y() - height;
+  return {static_cast<double>(x),
+          static_cast<double>(yBottom),
+          static_cast<double>(width),
+          static_cast<double>(height)};
+}
+
+QRect matlabFigurePosToQtRect(const std::array<double, 4>& pos) {
+  const QRect screen = QGuiApplication::primaryScreen()
+                           ? QGuiApplication::primaryScreen()->availableGeometry()
+                           : QRect(0, 0, 1440, 900);
+  const int x = static_cast<int>(std::llround(pos[0]));
+  const int width = static_cast<int>(std::llround(pos[2]));
+  const int height = static_cast<int>(std::llround(pos[3]));
+  const int yBottom = static_cast<int>(std::llround(pos[1]));
+  const int yTop = screen.y() + screen.height() - yBottom - height;
+  return QRect(x, yTop, width, height);
 }
 
 double niceNumber(double x, bool roundValue) {
@@ -186,6 +213,7 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName,
       fftProvider_(std::move(fftProvider)) {
   setWindowTitle(graphics_.figure().title);
   resize(900, 460);
+  syncFigurePosFromWidget();
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
 
@@ -344,7 +372,22 @@ void SignalGraphWindow::applyXDataToAllLines(const QVector<double>& xdata) {
 }
 
 void SignalGraphWindow::refreshGraphics() {
+  syncFigurePosFromWidget();
   updateYRange();
+  invalidateStaticLayer();
+  update();
+}
+
+std::array<double, 4> SignalGraphWindow::currentFigurePos() const {
+  return qtRectToMatlabFigurePos(geometry());
+}
+
+void SignalGraphWindow::applyFigurePos(const std::array<double, 4>& pos) {
+  const QRect rect = matlabFigurePosToQtRect(pos);
+  if (rect.isValid()) {
+    setGeometry(rect);
+  }
+  syncFigurePosFromWidget();
   invalidateStaticLayer();
   update();
 }
@@ -842,9 +885,19 @@ void SignalGraphWindow::updatePlayhead() {
   update(plotRect());
 }
 
+void SignalGraphWindow::moveEvent(QMoveEvent* event) {
+  QWidget::moveEvent(event);
+  syncFigurePosFromWidget();
+}
+
 void SignalGraphWindow::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
+  syncFigurePosFromWidget();
   invalidateStaticLayer();
+}
+
+void SignalGraphWindow::syncFigurePosFromWidget() {
+  graphics_.figureMutable().common.pos = currentFigurePos();
 }
 
 void SignalGraphWindow::updateYRange() {

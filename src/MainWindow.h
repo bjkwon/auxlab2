@@ -13,6 +13,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
+#include <array>
 
 class QListWidget;
 class QListWidgetItem;
@@ -36,6 +37,13 @@ public:
   MainWindow();
   ~MainWindow() override;
   bool handleGraphicsBackendEvent(const auxGraphicsEvent& event, std::string& err);
+  std::uint64_t currentGraphicsFigureId() const;
+  std::uint64_t currentGraphicsAxesId() const;
+  std::uint64_t createGraphicsFigure(std::string& err);
+  std::uint64_t createGraphicsAxes(std::string& err);
+  std::uint64_t createGraphicsAxesFromHandle(std::uint64_t handleId, std::string& err);
+  std::uint64_t createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err);
+  bool deleteGraphicsHandle(std::uint64_t handleId, std::string& err);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;

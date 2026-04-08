@@ -404,6 +404,65 @@ int auxlab2GraphicsNotify(void* userdata, const auxGraphicsEvent& event, std::st
   }
   return window->handleGraphicsBackendEvent(event, errstr) ? 0 : 1;
 }
+
+std::uint64_t auxlab2CurrentFigureId(void* userdata) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  return window ? window->currentGraphicsFigureId() : 0;
+}
+
+std::uint64_t auxlab2CurrentAxesId(void* userdata) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  return window ? window->currentGraphicsAxesId() : 0;
+}
+
+std::uint64_t auxlab2CreateFigure(void* userdata, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsFigure(errstr);
+}
+
+std::uint64_t auxlab2CreateAxes(void* userdata, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsAxes(errstr);
+}
+
+std::uint64_t auxlab2AxesFromHandle(void* userdata, std::uint64_t handleId, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->createGraphicsAxesFromHandle(handleId, errstr);
+}
+
+std::uint64_t auxlab2AxesAtPos(void* userdata, const double pos[4], std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  if (!pos) {
+    errstr = "axes() requires a position vector.";
+    return 0;
+  }
+  return window->createGraphicsAxesAtPos({pos[0], pos[1], pos[2], pos[3]}, errstr);
+}
+
+int auxlab2DeleteHandle(void* userdata, std::uint64_t handleId, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->deleteGraphicsHandle(handleId, errstr) ? 1 : 0;
+}
 }  // namespace
 
 MainWindow::MainWindow() {
@@ -413,6 +472,13 @@ MainWindow::MainWindow() {
     auxGraphicsBackend backend;
     backend.userdata = this;
     backend.notify = &auxlab2GraphicsNotify;
+    backend.current_figure = &auxlab2CurrentFigureId;
+    backend.current_axes = &auxlab2CurrentAxesId;
+    backend.create_figure = &auxlab2CreateFigure;
+    backend.create_axes = &auxlab2CreateAxes;
+    backend.axes_from_handle = &auxlab2AxesFromHandle;
+    backend.axes_at_pos = &auxlab2AxesAtPos;
+    backend.delete_handle = &auxlab2DeleteHandle;
     std::string err;
     if (!engine_.installGraphicsBackend(backend, err)) {
       QMessageBox::warning(this, "AUX Graphics", QString::fromStdString(err));
@@ -457,6 +523,146 @@ bool MainWindow::handleGraphicsBackendEvent(const auxGraphicsEvent& event, std::
       return true;
   }
   return true;
+}
+
+std::uint64_t MainWindow::currentGraphicsFigureId() const {
+  return graphicsManager_.currentFigureId();
+}
+
+std::uint64_t MainWindow::currentGraphicsAxesId() const {
+  return graphicsManager_.currentAxesId();
+}
+
+std::uint64_t MainWindow::createGraphicsFigure(std::string& err) {
+  auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+  if (!window) {
+    err = "Failed to create figure window.";
+    return 0;
+  }
+  return window->graphicsModel().figure().common.id;
+}
+
+std::uint64_t MainWindow::createGraphicsAxes(std::string& err) {
+  SignalGraphWindow* window = graphicsManager_.currentFigureWindow();
+  if (!window) {
+    window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+  }
+  if (!window) {
+    err = "Failed to create figure window for axes().";
+    return 0;
+  }
+  const auto axesId = window->addAxes({0.08, 0.18, 0.86, 0.72});
+  if (axesId == 0) {
+    err = "Failed to create axes.";
+    return 0;
+  }
+  window->selectAxes(axesId);
+  focusWindow(window);
+  graphicsManager_.markFocused(window);
+  return axesId;
+}
+
+std::uint64_t MainWindow::createGraphicsAxesFromHandle(std::uint64_t handleId, std::string& err) {
+  if (handleId == 0) {
+    err = "Error: invalid axes argument: 0";
+    return 0;
+  }
+
+  if (auto* owner = graphicsManager_.findAxesOwner(handleId)) {
+    owner->selectAxes(handleId);
+    graphicsManager_.markFocused(owner);
+    focusWindow(owner);
+    return handleId;
+  }
+
+  if (auto* figure = graphicsManager_.findFigureById(handleId)) {
+    const auto axesId = figure->addAxes({0.08, 0.18, 0.86, 0.72});
+    if (axesId == 0) {
+      err = "Failed to create axes.";
+      return 0;
+    }
+    figure->selectAxes(axesId);
+    graphicsManager_.markFocused(figure);
+    focusWindow(figure);
+    return axesId;
+  }
+
+  err = "Error: figure/axes handle not found: " + std::to_string(handleId);
+  return 0;
+}
+
+std::uint64_t MainWindow::createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err) {
+  SignalGraphWindow* window = graphicsManager_.currentFigureWindow();
+  if (!window) {
+    window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
+  }
+  if (!window) {
+    err = "Failed to create figure window for axes().";
+    return 0;
+  }
+  const auto axesId = window->addAxes(pos);
+  if (axesId == 0) {
+    err = "Failed to create axes.";
+    return 0;
+  }
+  window->selectAxes(axesId);
+  graphicsManager_.markFocused(window);
+  focusWindow(window);
+  return axesId;
+}
+
+bool MainWindow::deleteGraphicsHandle(std::uint64_t handleId, std::string& err) {
+  if (handleId == 0) {
+    err = "Error: delete() requires a graphics handle.";
+    return false;
+  }
+
+  if (auto* figure = graphicsManager_.findFigureById(handleId)) {
+    const bool deletingCurrent = (graphicsManager_.currentFigureWindow() == figure);
+    if (deletingCurrent) {
+      graphicsManager_.clearCurrentWindow(figure);
+    }
+    figure->close();
+    return true;
+  }
+
+  if (auto* owner = graphicsManager_.findAxesOwner(handleId)) {
+    const bool deletingCurrentAxes = (graphicsManager_.currentFigureWindow() == owner &&
+                                      graphicsManager_.currentAxesId() == handleId);
+    if (!owner->removeAxes(handleId)) {
+      err = "Error: graphics handle not found: " + std::to_string(handleId);
+      return false;
+    }
+    if (deletingCurrentAxes) {
+      graphicsManager_.markFocused(owner);
+    }
+    return true;
+  }
+
+  for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
+    if (it->kind != WindowKind::Graph || !it->window) {
+      continue;
+    }
+    if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
+      if (g->graphicsModel().containsLine(handleId)) {
+        if (!g->removeLine(handleId)) {
+          err = "Error: graphics handle not found: " + std::to_string(handleId);
+          return false;
+        }
+        return true;
+      }
+      if (g->graphicsModel().containsText(handleId)) {
+        if (!g->removeText(handleId)) {
+          err = "Error: graphics handle not found: " + std::to_string(handleId);
+          return false;
+        }
+        return true;
+      }
+    }
+  }
+
+  err = "Error: graphics handle not found: " + std::to_string(handleId);
+  return false;
 }
 
 void MainWindow::buildUi() {
@@ -1327,6 +1533,16 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     normalized = QString("text(%1, %2)").arg(methodTextMatch.captured(1), methodTextMatch.captured(2).trimmed());
   }
 
+  static const QRegularExpression kAxesCallForAuxe(R"(^axes\s*\((.*)\)$)");
+  static const QRegularExpression kDeleteCallForAuxe(R"(^delete\s*\((.*)\)$)");
+  // Let auxe own migrated special variables and builtin forms. More complex
+  // expressions such as gcf.color still route through the existing auxlab2 bridge.
+  if (normalized == "gcf" || normalized == "gca" || normalized == "figure" || normalized == "axes" ||
+      kAxesCallForAuxe.match(normalized).hasMatch() ||
+      kDeleteCallForAuxe.match(normalized).hasMatch()) {
+    return false;
+  }
+
   auto finalizeOutput = [this, &lhs, &output](const QString& value) {
     output = value;
     if (!lhs.isEmpty() && !value.startsWith(QStringLiteral("Error:"))) {
@@ -1458,6 +1674,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (handleId == figureId) {
       const auto& fig = model.figure();
       if (key == "type") return QStringLiteral("\"figure\"");
+      if (key == "pos") return formatDoubleArray4(owner->currentFigurePos());
       if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
       return QString("Error: unsupported figure property: %1").arg(prop);
     }
@@ -1545,6 +1762,15 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     };
 
     if (handleId == figureId) {
+      if (key == "pos") {
+        std::array<double, 4> pos{};
+        if (!parseMatlabPosVector(rhs, pos)) {
+          return QString("Error: unsupported or invalid figure property assignment: %1").arg(prop);
+        }
+        model.figureMutable().common.pos = pos;
+        owner->applyFigurePos(pos);
+        return QStringLiteral("[]");
+      }
       if (!setCommon(model.figureMutable().common)) {
         return QString("Error: unsupported or invalid figure property assignment: %1").arg(prop);
       }

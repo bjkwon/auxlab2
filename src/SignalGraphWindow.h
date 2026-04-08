@@ -6,6 +6,7 @@
 #include <QAudioSink>
 #include <QBuffer>
 #include <QImage>
+#include <QMoveEvent>
 #include <optional>
 #include <QTimer>
 #include <QWidget>
@@ -55,6 +56,8 @@ public:
   void applyXDataToAllLines(const QVector<double>& xdata);
   const GraphicsFigureModel& graphicsModel() const { return graphics_; }
   GraphicsFigureModel& graphicsModelMutable() { return graphics_; }
+  std::array<double, 4> currentFigurePos() const;
+  void applyFigurePos(const std::array<double, 4>& pos);
   void refreshGraphics();
 
 protected:
@@ -64,6 +67,7 @@ protected:
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
   void leaveEvent(QEvent* event) override;
+  void moveEvent(QMoveEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
 
 private:
@@ -99,6 +103,7 @@ private:
   void drawFftOverlays(QPainter& p, const QRect& plot);
   std::vector<FftPaneLayout> buildFftPaneLayouts(const QRect& plot, int nChannels) const;
   QPoint clampFftPaneOffset(const QRect& plot, const QPoint& desired, int channelIndex) const;
+  void syncFigurePosFromWidget();
 
   QString varName_;
   SignalData data_;
