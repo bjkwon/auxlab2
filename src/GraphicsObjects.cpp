@@ -138,15 +138,15 @@ void GraphicsFigureModel::rebuildSignalChildren(const SignalData& data) {
   }
 
   if (channelCount_ >= 2) {
-    auto& leftAxes = addAxesHandle(0, kDefaultTopAxesPos);
-    auto& rightAxes = addAxesHandle(1, kDefaultBottomAxesPos);
-    currentAxesId_ = leftAxes.common.id;
-    addDefaultLine(leftAxes.common.id, 0, kDefaultLeftLineColor);
-    addDefaultLine(rightAxes.common.id, 1, kDefaultRightLineColor);
+    const std::uint64_t leftAxesId = addAxesHandle(0, kDefaultTopAxesPos).common.id;
+    const std::uint64_t rightAxesId = addAxesHandle(1, kDefaultBottomAxesPos).common.id;
+    currentAxesId_ = leftAxesId;
+    addDefaultLine(leftAxesId, 0, kDefaultLeftLineColor);
+    addDefaultLine(rightAxesId, 1, kDefaultRightLineColor);
   } else {
-    auto& axes = addAxesHandle(0, kDefaultMonoAxesPos);
-    currentAxesId_ = axes.common.id;
-    addDefaultLine(axes.common.id, 0, kDefaultLeftLineColor);
+    const std::uint64_t axesId = addAxesHandle(0, kDefaultMonoAxesPos).common.id;
+    currentAxesId_ = axesId;
+    addDefaultLine(axesId, 0, kDefaultLeftLineColor);
   }
 
   syncLineData(data);
@@ -256,15 +256,16 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
     }
 
     const auto& channel = data.channels[static_cast<size_t>(line.logicalChannel)].samples;
-    line.xdata.reserve(static_cast<qsizetype>(channel.size()));
     line.ydata.reserve(static_cast<qsizetype>(channel.size()));
     for (size_t i = 0; i < channel.size(); ++i) {
-      if (data.isAudio && data.sampleRate > 0) {
-        line.xdata.push_back(data.startTimeSec + static_cast<double>(i) / data.sampleRate);
-      } else {
+      line.ydata.push_back(channel[i]);
+    }
+
+    if (!data.isAudio || data.sampleRate <= 0) {
+      line.xdata.reserve(static_cast<qsizetype>(channel.size()));
+      for (size_t i = 0; i < channel.size(); ++i) {
         line.xdata.push_back(static_cast<double>(i + 1));
       }
-      line.ydata.push_back(channel[i]);
     }
   }
 
@@ -275,7 +276,23 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
     double ymin = -1.0;
     double ymax = 1.0;
     for (const auto& line : lines_) {
-      if (line.common.parentId != axes.common.id || line.xdata.isEmpty() || line.ydata.isEmpty()) {
+      if (line.common.parentId != axes.common.id || line.ydata.isEmpty()) {
+        continue;
+      }
+      if (data.isAudio && data.sampleRate > 0) {
+        const double lineXMin = data.startTimeSec;
+        const int sampleCount = line.ydata.size();
+        const double lineXMax = data.startTimeSec +
+                                static_cast<double>(std::max(0, sampleCount - 1)) /
+                                    static_cast<double>(data.sampleRate);
+        if (!any) {
+          xmin = lineXMin;
+          xmax = lineXMax;
+          any = true;
+        } else {
+          xmin = std::min(xmin, lineXMin);
+          xmax = std::max(xmax, lineXMax);
+        }
         continue;
       }
       for (int i = 0; i < line.xdata.size(); ++i) {
@@ -297,11 +314,15 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
       if (std::fabs(xmax - xmin) < 1e-12) {
         xmax = xmin + 1.0;
       }
-      if (std::fabs(ymax - ymin) < 1e-12) {
-        ymax = ymin + 1.0;
-      }
       axes.xlim = {xmin, xmax};
-      axes.ylim = {ymin, ymax};
+      if (data.isAudio) {
+        axes.ylim = {-1.0, 1.0};
+      } else {
+        if (std::fabs(ymax - ymin) < 1e-12) {
+          ymax = ymin + 1.0;
+        }
+        axes.ylim = {ymin, ymax};
+      }
     } else {
       axes.xlim = {0.0, 1.0};
       axes.ylim = {-1.0, 1.0};

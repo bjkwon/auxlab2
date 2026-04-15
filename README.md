@@ -111,8 +111,20 @@ History file:
 - x/y ticks and labels
 - `+`: zoom in (center-based)
 - `-`: zoom out
+- `Left` / `Right`: pan view
 - Mouse drag: select range
 - `Enter`: zoom to selected range
+- Range navigation shortcuts:
+  - macOS: `Cmd+Left`: set view start to `0`
+  - Windows/Linux: `Alt+Left`: set view start to `0`
+  - macOS: `Cmd+Right`: set view end to the signal end
+  - Windows/Linux: `Alt+Right`: set view end to the signal end
+  - macOS: `Cmd+/`: reset to the full signal range
+  - Windows/Linux: `Alt+/`: reset to the full signal range
+  - macOS: `Cmd+,`: go back to the previous range
+  - Windows/Linux: `Alt+,`: go back to the previous range
+  - macOS: `Cmd+.`: go forward again after stepping back
+  - Windows/Linux: `Alt+.`: go forward again after stepping back
 - Stereo audio:
   - default: vertical stacked channels
   - `F2`: cycle vertical -> overlay (blue/red) -> overlay (red/blue)

@@ -10,10 +10,12 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QRect>
+#include <QByteArray>
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
 #include <array>
+#include <map>
 
 class QListWidget;
 class QListWidgetItem;
@@ -49,6 +51,8 @@ public:
   std::uint64_t createGraphicsAxesFromHandle(std::uint64_t handleId, std::string& err);
   std::uint64_t createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err);
   bool deleteGraphicsHandle(std::uint64_t handleId, std::string& err);
+  bool startPlaybackHandle(std::uint64_t handleId, AuxObj obj, int repeatCount, bool reuseExistingHandle, std::string& err);
+  bool controlPlaybackHandle(std::uint64_t handleId, auxPlaybackCommand command, std::string& err);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -109,6 +113,7 @@ private:
                                              bool namedPlot,
                                              const QString& sourcePath,
                                              bool variableBacked);
+  bool openGraphicsPathDetail(const QString& path);
   void openPathDetail(const QString& path);
   void playAudioForPath(const QString& path);
   void openStructMembersForPath(const QString& path);
@@ -124,6 +129,14 @@ private:
   void toggleLastTwoScopedWindows();
   void closeAllScopedWindowsInCurrentScope();
   void noteScopedWindowFocus(QWidget* window);
+  SignalGraphWindow* graphWindowForHandle(std::uint64_t handleId) const;
+  std::optional<std::uint64_t> graphicsHandleIdForVariable(const QString& varName) const;
+  std::optional<std::vector<std::uint64_t>> graphicsHandleReferenceIds(std::uint64_t handleId, const QString& prop) const;
+  std::optional<std::vector<std::uint64_t>> graphicsHandlePathIds(const QString& path) const;
+  std::vector<VarSnapshot> graphicsHandleMembersForId(std::uint64_t handleId) const;
+  std::vector<VarSnapshot> graphicsHandleArrayMembers(const std::vector<std::uint64_t>& ids) const;
+  QString graphicsHandleProperty(std::uint64_t handleId, const QString& prop) const;
+  QString graphicsHandleDump(std::uint64_t handleId) const;
 
   bool variableSupportsSignalDisplay(const QString& varName) const;
   bool variableIsAudio(const QString& varName) const;
@@ -155,6 +168,7 @@ private:
   QString activeDebugFilePath() const;
   void showSettingsDialog();
   void showAboutDialog();
+  void refreshPlaybackHandles();
   AuxEngineFacade engine_;
   GraphicsManager graphicsManager_;
 
@@ -193,6 +207,23 @@ private:
   QAudioSink* varAudioSink_ = nullptr;
   QBuffer* varAudioBuffer_ = nullptr;
   QByteArray varPcmData_;
+
+  struct PlaybackSession {
+    std::uint64_t handleId = 0;
+    QAudioSink* sink = nullptr;
+    QBuffer* buffer = nullptr;
+    QByteArray pcmData;
+    int sampleRate = 0;
+    int channelCount = 0;
+    int totalFrames = 0;
+    int repeatCount = 1;
+    double durationMs = 0.0;
+    std::vector<int> segmentEndFrames;
+    qint64 pausedBytes = 0;
+    bool paused = false;
+  };
+
+  std::map<std::uint64_t, PlaybackSession> playbackSessions_;
 
   int historyNavIndex_ = -1;
   QString historyDraft_;

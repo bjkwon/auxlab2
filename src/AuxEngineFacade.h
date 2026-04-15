@@ -55,7 +55,9 @@ public:
 
   bool init();
   bool installGraphicsBackend(const auxGraphicsBackend& backend, std::string& err);
+  bool installPlaybackBackend(const auxPlaybackBackend& backend, std::string& err);
   void clearGraphicsBackend();
+  void clearPlaybackBackend();
   EvalResult eval(const std::string& command);
   int pollAsync();
 
@@ -77,6 +79,8 @@ public:
   std::set<int> getBreakpoints(const std::string& udfName) const;
 
   bool deleteVar(const std::string& varName);
+  bool setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids);
+  bool updateRuntimeHandleMembers(std::uint64_t handleId, const std::map<std::string, double>& members);
   std::string engineVersion() const;
 
   bool isPaused() const;

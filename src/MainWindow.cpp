@@ -56,6 +56,7 @@ constexpr int kMaxRecentUdfFiles = 8;
 constexpr int kHistoryCommandRole = Qt::UserRole + 1;
 constexpr int kHistoryCountRole = Qt::UserRole + 2;
 constexpr int kHistoryIsCommentRole = Qt::UserRole + 3;
+constexpr uint16_t kDisplayTypebitHandle = 0x4000;
 
 QString historyFilePath() {
   QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -113,33 +114,77 @@ std::optional<SignalData> signalDataFromAuxObj(AuxObj obj, int defaultSampleRate
 
   SignalData data;
   data.isAudio = aux_is_audio(obj);
-  data.sampleRate = defaultSampleRate;
+  data.sampleRate = 0;
   double minStartMs = std::numeric_limits<double>::infinity();
+  struct SegmentCopy {
+    int startSample = 0;
+    std::vector<double> samples;
+  };
+  std::vector<std::vector<SegmentCopy>> byChannel(static_cast<size_t>(channels));
+
+  for (int ch = 0; ch < channels; ++ch) {
+    const int segCount = aux_num_segments(obj, ch);
+    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
+      AuxSignal seg{};
+      if (!aux_get_segment(obj, ch, segIndex, seg)) {
+        continue;
+      }
+      minStartMs = std::min(minStartMs, seg.tmark);
+      if (seg.fs > 0) {
+        data.sampleRate = seg.fs;
+      }
+      SegmentCopy copy;
+      copy.samples.resize(seg.nSamples);
+      if (seg.buf && seg.nSamples > 0) {
+        std::copy(seg.buf, seg.buf + seg.nSamples, copy.samples.begin());
+      }
+      byChannel[static_cast<size_t>(ch)].push_back(std::move(copy));
+    }
+  }
+
+  if (!std::isfinite(minStartMs)) {
+    return std::nullopt;
+  }
+  if (data.sampleRate <= 0) {
+    data.sampleRate = defaultSampleRate > 0 ? defaultSampleRate : 1;
+  }
+
+  int globalTotalSamples = 0;
+  for (int ch = 0; ch < channels; ++ch) {
+    const int segCount = aux_num_segments(obj, ch);
+    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
+      AuxSignal seg{};
+      if (!aux_get_segment(obj, ch, segIndex, seg)) {
+        continue;
+      }
+      const int startSample = std::max(0, static_cast<int>(std::llround((seg.tmark - minStartMs) * data.sampleRate / 1000.0)));
+      byChannel[static_cast<size_t>(ch)][static_cast<size_t>(segIndex)].startSample = startSample;
+      globalTotalSamples = std::max(globalTotalSamples, startSample + static_cast<int>(seg.nSamples));
+    }
+  }
+
+  if (globalTotalSamples <= 0) {
+    return std::nullopt;
+  }
 
   data.channels.reserve(static_cast<size_t>(channels));
   for (int ch = 0; ch < channels; ++ch) {
-    AuxSignal seg{};
-    if (aux_get_segment(obj, ch, 0, seg)) {
-      minStartMs = std::min(minStartMs, seg.tmark);
-      if (data.sampleRate <= 0 && seg.fs > 0) {
-        data.sampleRate = seg.fs;
-      }
-    }
-
-    const auto len = aux_flatten_channel_length(obj, ch);
-    if (len == 0) {
-      continue;
-    }
-
     ChannelData channel;
-    channel.samples.resize(len);
-    aux_flatten_channel(obj, ch, channel.samples.data(), channel.samples.size());
+    channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+    for (const auto& seg : byChannel[static_cast<size_t>(ch)]) {
+      if (seg.samples.empty()) {
+        continue;
+      }
+      const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
+      if (start >= channel.samples.size()) {
+        continue;
+      }
+      const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
+      std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
+    }
     data.channels.push_back(std::move(channel));
   }
 
-  if (data.channels.empty()) {
-    return std::nullopt;
-  }
   if (data.isAudio && std::isfinite(minStartMs)) {
     data.startTimeSec = minStartMs / 1000.0;
   }
@@ -162,6 +207,30 @@ std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
     return std::nullopt;
   }
   return values;
+}
+
+QByteArray buildAudioPcm16(const SignalData& sig, int& outChannelCount, int& outTotalFrames) {
+  outChannelCount = std::min<int>(2, static_cast<int>(sig.channels.size()));
+  const int dataFrames = sig.channels.empty() ? 0 : static_cast<int>(sig.channels.front().samples.size());
+  const int sampleRate = sig.sampleRate > 0 ? sig.sampleRate : 22050;
+  const int startOffsetFrames = std::max(0, static_cast<int>(std::llround(sig.startTimeSec * sampleRate)));
+  outTotalFrames = startOffsetFrames + dataFrames;
+
+  QByteArray pcm;
+  pcm.resize(outTotalFrames * outChannelCount * static_cast<int>(sizeof(qint16)));
+  auto* out = reinterpret_cast<qint16*>(pcm.data());
+  for (int i = 0; i < outTotalFrames; ++i) {
+    const int di = i - startOffsetFrames;
+    for (int c = 0; c < outChannelCount; ++c) {
+      const auto& src = sig.channels[static_cast<size_t>(c)].samples;
+      double v = 0.0;
+      if (di >= 0 && di < static_cast<int>(src.size())) {
+        v = std::clamp(src[static_cast<size_t>(di)], -1.0, 1.0);
+      }
+      *out++ = static_cast<qint16>(std::lrint(v * 32767.0));
+    }
+  }
+  return pcm;
 }
 
 QString nextGraphicsTempName() {
@@ -460,6 +529,32 @@ bool parseBoolExpr(const QString& text, bool& value) {
   return false;
 }
 
+std::optional<SignalData> signalDataFromNumericDisplay(const QString& text) {
+  QVector<double> values;
+  if (parseDoubleVectorExpr(text, values)) {
+    SignalData data;
+    ChannelData channel;
+    channel.samples.reserve(values.size());
+    for (double v : values) {
+      channel.samples.push_back(v);
+    }
+    data.channels.push_back(std::move(channel));
+    return data;
+  }
+
+  bool ok = false;
+  const double scalar = text.trimmed().toDouble(&ok);
+  if (!ok) {
+    return std::nullopt;
+  }
+
+  SignalData data;
+  ChannelData channel;
+  channel.samples.push_back(scalar);
+  data.channels.push_back(std::move(channel));
+  return data;
+}
+
 int auxlab2GraphicsNotify(void* userdata, const auxGraphicsEvent& event, std::string& errstr) {
   auto* window = static_cast<MainWindow*>(userdata);
   if (!window) {
@@ -593,6 +688,32 @@ int auxlab2DeleteHandle(void* userdata, std::uint64_t handleId, std::string& err
   }
   return window->deleteGraphicsHandle(handleId, errstr) ? 1 : 0;
 }
+
+int auxlab2StartPlayback(void* userdata,
+                         std::uint64_t handleId,
+                         AuxObj obj,
+                         int repeatCount,
+                         int reuseExistingHandle,
+                         std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 playback backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->startPlaybackHandle(handleId, obj, repeatCount, reuseExistingHandle != 0, errstr) ? 1 : 0;
+}
+
+int auxlab2ControlPlayback(void* userdata,
+                           std::uint64_t handleId,
+                           auxPlaybackCommand command,
+                           std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 playback backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->controlPlaybackHandle(handleId, command, errstr) ? 1 : 0;
+}
 }  // namespace
 
 MainWindow::MainWindow() {
@@ -618,6 +739,14 @@ MainWindow::MainWindow() {
     if (!engine_.installGraphicsBackend(backend, err)) {
       QMessageBox::warning(this, "AUX Graphics", QString::fromStdString(err));
     }
+
+    auxPlaybackBackend playbackBackend;
+    playbackBackend.userdata = this;
+    playbackBackend.start = &auxlab2StartPlayback;
+    playbackBackend.control = &auxlab2ControlPlayback;
+    if (!engine_.installPlaybackBackend(playbackBackend, err)) {
+      QMessageBox::warning(this, "AUX Playback", QString::fromStdString(err));
+    }
   }
 
   loadPersistedRuntimeSettings();
@@ -640,8 +769,17 @@ MainWindow::MainWindow() {
 
 MainWindow::~MainWindow() {
   engine_.clearGraphicsBackend();
+  engine_.clearPlaybackBackend();
   if (varAudioSink_) {
     varAudioSink_->stop();
+  }
+  for (auto& entry : playbackSessions_) {
+    if (entry.second.sink) {
+      entry.second.sink->stop();
+    }
+    if (entry.second.buffer) {
+      entry.second.buffer->close();
+    }
   }
 }
 
@@ -1274,8 +1412,14 @@ void MainWindow::connectSignals() {
     injectCommandFromHistory(cmd, true);
   });
 
-  auto variableDoubleClick = [this](QTreeWidgetItem*, int) {
-    openSignalTableForSelected();
+  auto variableDoubleClick = [this](QTreeWidgetItem* item, int) {
+    if (!item) {
+      return;
+    }
+    if (auto* box = item->treeWidget()) {
+      box->setCurrentItem(item);
+    }
+    openPathDetail(item->text(0));
   };
   connect(audioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
   connect(nonAudioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
@@ -1755,6 +1899,18 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 void MainWindow::runCommand(const QString& cmd) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
   QString actual = cmd;
+  static const QRegularExpression kMethodPlayNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\b(?!\s*\())");
+  static const QRegularExpression kMethodPlayArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\s*\((.*)\))");
+  static const QRegularExpression kMethodStopNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.stop(?:\s*\(\s*\))?\b)");
+  static const QRegularExpression kMethodPauseNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.pause(?:\s*\(\s*\))?\b)");
+  static const QRegularExpression kMethodResumeNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.resume(?:\s*\(\s*\))?\b)");
+  if (!actual.trimmed().isEmpty()) {
+    actual.replace(kMethodPlayArg, QStringLiteral("play(\\1, \\2)"));
+    actual.replace(kMethodPlayNoArg, QStringLiteral("play(\\1)"));
+    actual.replace(kMethodStopNoArg, QStringLiteral("stop(\\1)"));
+    actual.replace(kMethodPauseNoArg, QStringLiteral("pause(\\1)"));
+    actual.replace(kMethodResumeNoArg, QStringLiteral("resume(\\1)"));
+  }
   if (!actual.trimmed().isEmpty()) {
     addHistory(actual);
   }
@@ -1839,9 +1995,16 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
   static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes\s*\(\s*\)$)");
   static const QRegularExpression kMethodDeleteNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.delete\s*\(\s*\)$)");
+  static const QRegularExpression kMethodPlotNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot$)");
   static const QRegularExpression kMethodPlot(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot\s*\((.*)\)$)");
   static const QRegularExpression kMethodLine(R"(^([A-Za-z_][A-Za-z0-9_]*)\.line\s*\((.*)\)$)");
   static const QRegularExpression kMethodText(R"(^([A-Za-z_][A-Za-z0-9_]*)\.text\s*\((.*)\)$)");
+  if (const auto methodPlotNoArgMatch = kMethodPlotNoArg.match(normalized); methodPlotNoArgMatch.hasMatch()) {
+    const QString rewritten = QString("plot(%1)").arg(methodPlotNoArgMatch.captured(1));
+    const EvalResult result = engine_.eval((lhs.isEmpty() ? rewritten : QString("%1=%2").arg(lhs, rewritten)).toStdString());
+    output = QString::fromStdString(result.output);
+    return true;
+  }
   if (const auto methodAxesMatch = kMethodAxesNoArg.match(normalized); methodAxesMatch.hasMatch()) {
     normalized = QString("axes(%1)").arg(methodAxesMatch.captured(1));
   } else if (const auto methodDeleteMatch = kMethodDeleteNoArg.match(normalized); methodDeleteMatch.hasMatch()) {
@@ -1877,7 +2040,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   }
   // Let auxe own migrated special variables and builtin forms. More complex
   // expressions such as gcf.color still route through the existing auxlab2 bridge.
-  if (normalized == "gcf" || normalized == "gca" || normalized == "figure" || normalized == "axes" ||
+  if (normalized == "figure" || normalized == "axes" ||
       (kFigureCallForAuxe.match(normalized).hasMatch() && !kFigureNoArgForBridge.match(normalized).hasMatch()) ||
       simplePlotForAuxe ||
       kLineCallForAuxe.match(normalized).hasMatch() ||
@@ -1891,6 +2054,14 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (!lhs.isEmpty() && !value.startsWith(QStringLiteral("Error:"))) {
       const QString assignExpr = QString("%1=%2").arg(lhs, value);
       engine_.eval(assignExpr.toStdString());
+    }
+    return true;
+  };
+
+  auto finalizeHandleOutput = [this, &lhs, &output](const std::vector<std::uint64_t>& ids, const QString& display) {
+    output = display;
+    if (!lhs.isEmpty()) {
+      engine_.setHandleValues(lhs.toStdString(), ids);
     }
     return true;
   };
@@ -1921,14 +2092,25 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       return true;
     }
 
-    if (!isSimpleIdentifier(trimmedText)) {
-      return false;
-    }
+    auto getScalarHandleValue = [this](const QString& expr) -> std::optional<double> {
+      if (const auto scalar = engine_.getScalarValue(expr.toStdString()); scalar.has_value()) {
+        return scalar;
+      }
 
-    const auto scalar = engine_.getScalarValue(trimmedText.toStdString());
-    if (!scalar.has_value()) {
-      return false;
-    }
+      const QString tmpVar = nextGraphicsTempName();
+      const EvalResult evalResult = engine_.eval(QString("%1=%2").arg(tmpVar, expr).toStdString());
+      if (evalResult.status != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+        engine_.deleteVar(tmpVar.toStdString());
+        return std::nullopt;
+      }
+
+      const auto scalar = engine_.getScalarValue(tmpVar.toStdString());
+      engine_.deleteVar(tmpVar.toStdString());
+      return scalar;
+    };
+
+    const auto scalar = getScalarHandleValue(trimmedText);
+    if (!scalar.has_value()) return false;
 
     const double rounded = std::llround(*scalar);
     if (rounded <= 0 || std::fabs(*scalar - rounded) > 1e-9) {
@@ -1936,51 +2118,26 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
 
     outId = static_cast<std::uint64_t>(rounded);
-    if (sourceVar) {
+    if (sourceVar && isSimpleIdentifier(trimmedText)) {
       *sourceVar = trimmedText;
+    } else if (sourceVar) {
+      sourceVar->clear();
     }
     return true;
   };
 
-  auto graphWindowForLineId = [this](std::uint64_t lineId) -> SignalGraphWindow* {
-    for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
-      if (it->kind != WindowKind::Graph || !it->window) {
-        continue;
-      }
-      if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
-        if (g->graphicsModel().containsLine(lineId)) {
-          return g;
-        }
-      }
+  auto isKnownHandleVariable = [this](const QString& expr) -> bool {
+    if (expr == "gcf" || expr == "gca") {
+      return true;
     }
-    return nullptr;
-  };
-
-  auto graphWindowForTextId = [this](std::uint64_t textId) -> SignalGraphWindow* {
-    for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
-      if (it->kind != WindowKind::Graph || !it->window) {
-        continue;
-      }
-      if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
-        if (g->graphicsModel().containsText(textId)) {
-          return g;
-        }
-      }
+    if (!isSimpleIdentifier(expr)) {
+      return false;
     }
-    return nullptr;
-  };
-
-  auto graphWindowForAnyHandle = [&](std::uint64_t handleId) -> SignalGraphWindow* {
-    if (auto* owner = graphicsManager_.findFigureById(handleId)) {
-      return owner;
-    }
-    if (auto* owner = graphicsManager_.findAxesOwner(handleId)) {
-      return owner;
-    }
-    if (auto* owner = graphWindowForLineId(handleId)) {
-      return owner;
-    }
-    return graphWindowForTextId(handleId);
+    const auto vars = engine_.listVariables();
+    const auto it = std::find_if(vars.begin(), vars.end(), [&](const VarSnapshot& snap) {
+      return QString::fromStdString(snap.name) == expr;
+    });
+    return it != vars.end() && it->typeTag == "HNDL";
   };
 
   auto evaluateVectorExpr = [this](const QString& expr) -> std::optional<QVector<double>> {
@@ -1995,84 +2152,28 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     return values;
   };
 
-  auto handleGetter = [&](std::uint64_t handleId, const QString& prop) -> QString {
-    SignalGraphWindow* owner = graphWindowForAnyHandle(handleId);
-    if (!owner) {
-      return QString("Error: graphics handle not found: %1").arg(handleId);
+  auto evaluateGraphicsExpr = [this](const QString& expr) -> std::optional<QString> {
+    const QString tmpVar = nextGraphicsTempName();
+    const EvalResult evalResult = engine_.eval(QString("%1=%2").arg(tmpVar, expr).toStdString());
+    if (evalResult.status != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+      engine_.deleteVar(tmpVar.toStdString());
+      return std::nullopt;
     }
-
-    const auto& model = owner->graphicsModel();
-    const QString key = prop.trimmed().toLower();
-    const auto figureId = model.figure().common.id;
-
-    auto commonGetter = [&](const GraphicsObjectCommon& common) -> QString {
-      if (key == "pos") return formatDoubleArray4(common.pos);
-      if (key == "color") return formatColor(common.color);
-      if (key == "visible") return common.visible ? QStringLiteral("1") : QStringLiteral("0");
-      if (key == "parent") return common.parentId == 0 ? QStringLiteral("[]") : QString::number(common.parentId);
-      if (key == "children") return formatChildren(common.children);
-      return QString();
-    };
-
-    if (handleId == figureId) {
-      const auto& fig = model.figure();
-      if (key == "type") return QStringLiteral("\"figure\"");
-      if (key == "pos") return formatDoubleArray4(owner->currentFigurePos());
-      if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
-      return QString("Error: unsupported figure property: %1").arg(prop);
+    const auto scalar = engine_.getScalarValue(tmpVar.toStdString());
+    if (scalar.has_value()) {
+      engine_.deleteVar(tmpVar.toStdString());
+      return QString::number(*scalar, 'g', 15);
     }
-    if (const auto axes = std::find_if(model.axes().begin(), model.axes().end(), [handleId](const GraphicsAxesHandle& ax) {
-          return ax.common.id == handleId;
-        }); axes != model.axes().end()) {
-      if (key == "type") return QStringLiteral("\"axes\"");
-      if (const QString value = commonGetter(axes->common); !value.isEmpty()) return value;
-      if (key == "box") return axes->box ? QStringLiteral("1") : QStringLiteral("0");
-      if (key == "linewidth") return QString::number(axes->lineWidth);
-      if (key == "xlim") return formatDoubleArray2(axes->xlim);
-      if (key == "ylim") return formatDoubleArray2(axes->ylim);
-      if (key == "fontname") return QString("\"%1\"").arg(axes->fontName);
-      if (key == "fontsize") return QString::number(axes->fontSize);
-      if (key == "xscale") return QString("\"%1\"").arg(axes->xscale);
-      if (key == "yscale") return QString("\"%1\"").arg(axes->yscale);
-      if (key == "xgrid") return axes->xgrid ? QStringLiteral("1") : QStringLiteral("0");
-      if (key == "ygrid") return axes->ygrid ? QStringLiteral("1") : QStringLiteral("0");
-      return QString("Error: unsupported axes property: %1").arg(prop);
+    const auto values = engine_.getNumericVector(tmpVar.toStdString());
+    engine_.deleteVar(tmpVar.toStdString());
+    if (values.has_value()) {
+      return formatDoubleVector(*values);
     }
-    if (const auto* line = model.lineById(handleId)) {
-      if (key == "type") return QStringLiteral("\"line\"");
-      if (const QString value = commonGetter(line->common); !value.isEmpty()) return value;
-      if (key == "xdata") return formatDoubleVector(line->xdata);
-      if (key == "ydata") return formatDoubleVector(line->ydata);
-      if (key == "linewidth") return QString::number(line->lineWidth);
-      if (key == "linestyle") return QString("\"%1\"").arg(line->lineStyle);
-      if (key == "marker") return QString("\"%1\"").arg(line->marker);
-      if (key == "markersize") return QString::number(line->markerSize);
-      return QString("Error: unsupported line property: %1").arg(prop);
-    }
-    if (const auto& texts = model.texts(); std::any_of(texts.begin(), texts.end(), [handleId](const GraphicsTextHandle& text) {
-          return text.common.id == handleId;
-        })) {
-      const auto* text = [&]() -> const GraphicsTextHandle* {
-        for (const auto& item : texts) {
-          if (item.common.id == handleId) return &item;
-        }
-        return nullptr;
-      }();
-      if (!text) {
-        return QString("Error: graphics handle not found: %1").arg(handleId);
-      }
-      if (key == "type") return QStringLiteral("\"text\"");
-      if (const QString value = commonGetter(text->common); !value.isEmpty()) return value;
-      if (key == "fontname") return QString("\"%1\"").arg(text->fontName);
-      if (key == "fontsize") return QString::number(text->fontSize);
-      if (key == "string") return QString("\"%1\"").arg(text->stringValue);
-      return QString("Error: unsupported text property: %1").arg(prop);
-    }
-    return QString("Error: graphics handle not found: %1").arg(handleId);
+    return std::nullopt;
   };
 
   auto handleSetter = [&](std::uint64_t handleId, const QString& prop, const QString& rhs) -> QString {
-    SignalGraphWindow* owner = graphWindowForAnyHandle(handleId);
+    SignalGraphWindow* owner = graphWindowForHandle(handleId);
     if (!owner) {
       return QString("Error: graphics handle not found: %1").arg(handleId);
     }
@@ -2208,36 +2309,85 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     return QString("Error: graphics handle not found: %1").arg(handleId);
   };
 
-  static const QRegularExpression kHandleSetPattern(R"(^([A-Za-z_][A-Za-z0-9_]*|gcf|gca|\d+)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$)");
+  static const QRegularExpression kHandleCompoundSetPattern(R"(^(.+)\.([A-Za-z_][A-Za-z0-9_]*)\s*(\+=|-=|\*=|/=)\s*(.+)$)");
+  if (const auto compoundSetMatch = kHandleCompoundSetPattern.match(normalized); compoundSetMatch.hasMatch()) {
+    const QString rootExpr = compoundSetMatch.captured(1).trimmed();
+    const QString prop = compoundSetMatch.captured(2);
+    const QString op = compoundSetMatch.captured(3).left(1);
+    const QString rhs = compoundSetMatch.captured(4).trimmed();
+    std::uint64_t handleId = 0;
+    if (!resolveHandleId(rootExpr, handleId)) {
+      return false;
+    }
+    const QString currentValue = graphicsHandleProperty(handleId, prop);
+    if (currentValue.startsWith(QStringLiteral("Error:"))) {
+      output = currentValue;
+      return true;
+    }
+    const auto computedValue = evaluateGraphicsExpr(QString("(%1)%2(%3)").arg(currentValue, op, rhs));
+    if (!computedValue.has_value()) {
+      return finalizeOutput(QString("Error: invalid graphics property expression for %1").arg(prop));
+    }
+    const QString result = handleSetter(handleId, prop, *computedValue);
+    output = result;
+    return true;
+  }
+
+  static const QRegularExpression kHandleSetPattern(R"(^(.+)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$)");
   if (const auto setMatch = kHandleSetPattern.match(normalized); setMatch.hasMatch()) {
     std::uint64_t handleId = 0;
-    if (!resolveHandleId(setMatch.captured(1), handleId)) {
-      return finalizeOutput(QString("Error: invalid graphics handle: %1").arg(setMatch.captured(1)));
+    const QString rootExpr = setMatch.captured(1).trimmed();
+    if (!resolveHandleId(rootExpr, handleId)) {
+      return false;
     }
     const QString result = handleSetter(handleId, setMatch.captured(2), setMatch.captured(3).trimmed());
     output = result;
     return true;
   }
 
-  static const QRegularExpression kHandleGetPattern(R"(^([A-Za-z_][A-Za-z0-9_]*|gcf|gca|\d+)\.([A-Za-z_][A-Za-z0-9_]*)$)");
+  static const QRegularExpression kHandleGetPattern(R"(^(.+)\.([A-Za-z_][A-Za-z0-9_]*)$)");
   if (const auto getMatch = kHandleGetPattern.match(normalized); getMatch.hasMatch()) {
     std::uint64_t handleId = 0;
-    if (!resolveHandleId(getMatch.captured(1), handleId)) {
-      return finalizeOutput(QString("Error: invalid graphics handle: %1").arg(getMatch.captured(1)));
+    const QString rootExpr = getMatch.captured(1).trimmed();
+    if (!resolveHandleId(rootExpr, handleId)) {
+      return false;
     }
-    return finalizeOutput(handleGetter(handleId, getMatch.captured(2)));
+    const QString prop = getMatch.captured(2);
+    const QString value = graphicsHandleProperty(handleId, prop);
+    if (!lhs.isEmpty()) {
+      if (const auto refIds = graphicsHandleReferenceIds(handleId, prop); refIds.has_value()) {
+        return finalizeHandleOutput(*refIds, value);
+      }
+    }
+    return finalizeOutput(value);
+  }
+
+  if (!normalized.isEmpty() && !normalized.contains(QRegularExpression(R"(^\d+$)"))) {
+    std::uint64_t handleId = 0;
+    const bool knownHandleRoot = isKnownHandleVariable(normalized) ||
+                                 normalized.contains('(') ||
+                                 normalized.contains('.');
+    if (knownHandleRoot && resolveHandleId(normalized, handleId) && graphWindowForHandle(handleId)) {
+      if (!lhs.isEmpty()) {
+        return finalizeHandleOutput({handleId}, graphicsHandleText(handleId));
+      }
+      return finalizeOutput(graphicsHandleDump(handleId));
+    }
   }
 
   if (normalized == "figure") {
     auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
-    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+    const std::uint64_t id = window ? window->graphicsModel().figure().common.id : 0;
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   if (normalized == "gcf") {
-    return finalizeOutput(graphicsHandleText(graphicsManager_.currentFigureId()));
+    const std::uint64_t id = graphicsManager_.currentFigureId();
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
   if (normalized == "gca") {
-    return finalizeOutput(graphicsHandleText(graphicsManager_.currentAxesId()));
+    const std::uint64_t id = graphicsManager_.currentAxesId();
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   static const QRegularExpression kFigureCall(R"(^figure\s*\((.*)\)$)");
@@ -2249,7 +2399,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   static const QRegularExpression kDeleteCall(R"(^delete\s*\((.*)\)$)");
   if (kFigureNoArg.match(normalized).hasMatch()) {
     auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
-    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+    const std::uint64_t id = window ? window->graphicsModel().figure().common.id : 0;
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   bool ok = false;
@@ -2271,7 +2422,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       window->selectAxes(axesId);
       graphicsManager_.markFocused(window);
       focusWindow(window);
-      return finalizeOutput(graphicsHandleText(axesId));
+      return finalizeHandleOutput({axesId}, graphicsHandleText(axesId));
     }
 
     std::uint64_t axesOrFigureId = 0;
@@ -2283,7 +2434,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       owner->selectAxes(axesOrFigureId);
       graphicsManager_.markFocused(owner);
       focusWindow(owner);
-      return finalizeOutput(graphicsHandleText(axesOrFigureId));
+      return finalizeHandleOutput({axesOrFigureId}, graphicsHandleText(axesOrFigureId));
     }
 
     if (auto* figure = graphicsManager_.findFigureById(axesOrFigureId)) {
@@ -2291,7 +2442,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       figure->selectAxes(axesId);
       graphicsManager_.markFocused(figure);
       focusWindow(figure);
-      return finalizeOutput(graphicsHandleText(axesId));
+      return finalizeHandleOutput({axesId}, graphicsHandleText(axesId));
     }
 
     return finalizeOutput(QString("Error: figure/axes handle not found: %1").arg(axesArg));
@@ -2382,7 +2533,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
                                          styleSpec.marker,
                                          styleSpec.lineStyle);
     }
-    return finalizeOutput(graphicsHandleText(targetWindow ? targetWindow->graphicsModel().figure().common.id : 0));
+    const std::uint64_t id = targetWindow ? targetWindow->graphicsModel().figure().common.id : 0;
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   const QRegularExpressionMatch deleteMatch = kDeleteCall.match(normalized);
@@ -2425,18 +2577,16 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       return finalizeOutput(QStringLiteral("[]"));
     }
 
-    if (auto* owner = graphWindowForLineId(objectId)) {
-      if (!owner->removeLine(objectId)) {
-        return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
-      }
-      if (!sourceVar.isEmpty()) {
-        engine_.eval(QString("%1=[]").arg(sourceVar).toStdString());
-      }
-      return finalizeOutput(QStringLiteral("[]"));
-    }
-
-    if (auto* owner = graphWindowForTextId(objectId)) {
-      if (!owner->removeText(objectId)) {
+    if (auto* owner = graphWindowForHandle(objectId)) {
+      if (owner->graphicsModel().containsLine(objectId)) {
+        if (!owner->removeLine(objectId)) {
+          return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+        }
+      } else if (owner->graphicsModel().containsText(objectId)) {
+        if (!owner->removeText(objectId)) {
+          return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
+        }
+      } else {
         return finalizeOutput(QString("Error: graphics handle not found: %1").arg(arg));
       }
       if (!sourceVar.isEmpty()) {
@@ -2526,7 +2676,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
     focusWindow(targetWindow);
     graphicsManager_.markFocused(targetWindow);
-    return finalizeOutput(graphicsHandleText(lineId));
+    return finalizeHandleOutput({lineId}, graphicsHandleText(lineId));
   }
 
   const QRegularExpressionMatch textMatch = kTextCall.match(normalized);
@@ -2582,7 +2732,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
     focusWindow(targetWindow);
     graphicsManager_.markFocused(targetWindow);
-    return finalizeOutput(graphicsHandleText(textId));
+    return finalizeHandleOutput({textId}, graphicsHandleText(textId));
   }
 
   const QRegularExpressionMatch figureMatch = kFigureCall.match(normalized);
@@ -2593,7 +2743,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   const QString arg = figureMatch.captured(1).trimmed();
   if (arg.isEmpty()) {
     auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle());
-    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+    const std::uint64_t id = window ? window->graphicsModel().figure().common.id : 0;
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   if (arg.startsWith('"') && arg.endsWith('"') && arg.size() >= 2) {
@@ -2604,11 +2755,13 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (auto* existing = graphicsManager_.findNamedFigure(path)) {
       focusWindow(existing);
       graphicsManager_.markFocused(existing);
-      return finalizeOutput(graphicsHandleText(existing->graphicsModel().figure().common.id));
+      return finalizeHandleOutput({existing->graphicsModel().figure().common.id},
+                                  graphicsHandleText(existing->graphicsModel().figure().common.id));
     }
     openSignalGraphForPath(path);
     if (auto* current = graphicsManager_.currentFigureWindow()) {
-      return finalizeOutput(graphicsHandleText(current->graphicsModel().figure().common.id));
+      return finalizeHandleOutput({current->graphicsModel().figure().common.id},
+                                  graphicsHandleText(current->graphicsModel().figure().common.id));
     }
     return finalizeOutput(QStringLiteral("[]"));
   }
@@ -2616,7 +2769,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   std::array<double, 4> pos{};
   if (parseMatlabPosVector(arg, pos)) {
     auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), matlabFigureRectToQt(pos));
-    return finalizeOutput(graphicsHandleText(window ? window->graphicsModel().figure().common.id : 0));
+    const std::uint64_t id = window ? window->graphicsModel().figure().common.id : 0;
+    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
   std::uint64_t id = 0;
@@ -2624,7 +2778,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (auto* existing = graphicsManager_.findFigureById(id)) {
       focusWindow(existing);
       graphicsManager_.markFocused(existing);
-      return finalizeOutput(graphicsHandleText(existing->graphicsModel().figure().common.id));
+      return finalizeHandleOutput({existing->graphicsModel().figure().common.id},
+                                  graphicsHandleText(existing->graphicsModel().figure().common.id));
     }
     return finalizeOutput(QString("Error: figure handle not found: %1").arg(arg));
   }
@@ -2633,6 +2788,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 }
 
 void MainWindow::onAsyncPollTick() {
+  refreshPlaybackHandles();
   const int changed = engine_.pollAsync();
   if (changed <= 0) {
     return;
@@ -3262,6 +3418,10 @@ void MainWindow::openPathDetail(const QString& path) {
     return;
   }
 
+  if (openGraphicsPathDetail(path)) {
+    return;
+  }
+
   if (variableIsStruct(path)) {
     openStructMembersForPath(path);
     return;
@@ -3317,6 +3477,70 @@ void MainWindow::openPathDetail(const QString& path) {
   w->show();
 }
 
+bool MainWindow::openGraphicsPathDetail(const QString& path) {
+  if (path.isEmpty()) {
+    return false;
+  }
+
+  if (const auto ids = graphicsHandlePathIds(path); ids.has_value()) {
+    if (ids->empty()) {
+      auto* w = new TextObjectWindow(path, QStringLiteral("[]"));
+      w->setAttribute(Qt::WA_DeleteOnClose, true);
+      trackWindow(path, w, WindowKind::Text);
+      w->show();
+      return true;
+    }
+
+    if (ids->size() == 1) {
+      auto members = graphicsHandleMembersForId(ids->front());
+      auto* w = new StructMembersWindow(path, members);
+      w->setAttribute(Qt::WA_DeleteOnClose, true);
+      connect(w, &StructMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
+      connect(w, &StructMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
+      connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+      trackWindow(path, w, WindowKind::Text);
+      w->show();
+      return true;
+    }
+
+    auto* w = new CellMembersWindow(path, graphicsHandleArrayMembers(*ids));
+    w->setAttribute(Qt::WA_DeleteOnClose, true);
+    connect(w, &CellMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
+    connect(w, &CellMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
+    connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+    trackWindow(path, w, WindowKind::Text);
+    w->show();
+    return true;
+  }
+
+  const int dot = path.lastIndexOf('.');
+  if (dot <= 0) {
+    return false;
+  }
+
+  const QString root = path.left(dot);
+  const QString prop = path.mid(dot + 1);
+  const auto rootIds = graphicsHandlePathIds(root);
+  if (!rootIds.has_value() || rootIds->size() != 1) {
+    return false;
+  }
+  const QString value = graphicsHandleProperty(rootIds->front(), prop);
+
+  if (const auto numeric = signalDataFromNumericDisplay(value); numeric.has_value()) {
+    auto* w = new SignalTableWindow(path, *numeric);
+    w->setAttribute(Qt::WA_DeleteOnClose, true);
+    trackWindow(path, w, WindowKind::Table);
+    w->show();
+    return true;
+  }
+
+  auto* w = new TextObjectWindow(path, value);
+  w->setAttribute(Qt::WA_DeleteOnClose, true);
+  trackWindow(path, w, WindowKind::Text);
+  w->show();
+  return true;
+}
+
 void MainWindow::playAudioForPath(const QString& path) {
   if (path.isEmpty() || !variableIsAudio(path)) {
     return;
@@ -3347,31 +3571,14 @@ void MainWindow::playAudioForPath(const QString& path) {
     varAudioBuffer_ = nullptr;
   }
 
-  const int chCount = std::min<int>(2, static_cast<int>(sig->channels.size()));
-  const int dataFrames = static_cast<int>(sig->channels.front().samples.size());
-
   QAudioFormat fmt;
   const int sampleRate = sig->sampleRate > 0 ? sig->sampleRate : 22050;
+  int chCount = 0;
+  int totalFrames = 0;
+  varPcmData_ = buildAudioPcm16(*sig, chCount, totalFrames);
   fmt.setSampleRate(sampleRate);
   fmt.setChannelCount(chCount);
   fmt.setSampleFormat(QAudioFormat::Int16);
-
-  const int startOffsetFrames = std::max(0, static_cast<int>(std::llround(sig->startTimeSec * sampleRate)));
-  const int totalFrames = startOffsetFrames + dataFrames;
-
-  varPcmData_.resize(totalFrames * chCount * static_cast<int>(sizeof(qint16)));
-  auto* out = reinterpret_cast<qint16*>(varPcmData_.data());
-  for (int i = 0; i < totalFrames; ++i) {
-    const int di = i - startOffsetFrames;
-    for (int c = 0; c < chCount; ++c) {
-      const auto& src = sig->channels[static_cast<size_t>(c)].samples;
-      double v = 0.0;
-      if (di >= 0 && di < static_cast<int>(src.size())) {
-        v = std::clamp(src[static_cast<size_t>(di)], -1.0, 1.0);
-      }
-      *out++ = static_cast<qint16>(std::lrint(v * 32767.0));
-    }
-  }
 
   varAudioBuffer_ = new QBuffer(this);
   varAudioBuffer_->setData(varPcmData_);
@@ -3381,6 +3588,310 @@ void MainWindow::playAudioForPath(const QString& path) {
   varAudioSink_->start(varAudioBuffer_);
 }
 
+bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
+                                     AuxObj obj,
+                                     int repeatCount,
+                                     bool reuseExistingHandle,
+                                     std::string& err) {
+  if (!obj || repeatCount < 1) {
+    err = "play() requires an audio object and a positive repeat count.";
+    return false;
+  }
+
+  const auto sig = signalDataFromAuxObj(obj, 22050);
+  if (!sig || !sig->isAudio || sig->channels.empty()) {
+    err = "play() requires an audio object.";
+    return false;
+  }
+
+  const int sampleRate = sig->sampleRate > 0 ? sig->sampleRate : 22050;
+  const double onePassDurationMs = sig->startTimeSec * 1000.0 +
+                                   (sig->channels.empty() ? 0.0
+                                                          : 1000.0 * static_cast<double>(sig->channels.front().samples.size()) /
+                                                                static_cast<double>(sampleRate));
+  int channelCount = 0;
+  int onePassFrames = 0;
+  QByteArray onePassPcm = buildAudioPcm16(*sig, channelCount, onePassFrames);
+  if (onePassFrames <= 0 || channelCount <= 0) {
+    err = "play() received empty audio.";
+    return false;
+  }
+
+  QByteArray repeatedPcm;
+  repeatedPcm.reserve(onePassPcm.size() * repeatCount);
+  for (int i = 0; i < repeatCount; ++i) {
+    repeatedPcm += onePassPcm;
+  }
+  auto it = playbackSessions_.find(handleId);
+  if (reuseExistingHandle) {
+    if (it == playbackSessions_.end()) {
+      err = "Invalid or inactive playback handle.";
+      return false;
+    }
+    PlaybackSession& session = it->second;
+    if ((!session.paused && (!session.sink || !session.buffer ||
+         session.sink->state() == QAudio::IdleState || session.sink->state() == QAudio::StoppedState)) ||
+        session.sampleRate != sampleRate || session.channelCount != channelCount) {
+      err = "Queued playback must match the active playback format.";
+      return false;
+    }
+    session.pcmData += repeatedPcm;
+    if (session.buffer) {
+      session.buffer->buffer().append(repeatedPcm);
+    }
+    int cumulativeEnd = session.segmentEndFrames.empty() ? 0 : session.segmentEndFrames.back();
+    for (int i = 0; i < repeatCount; ++i) {
+      cumulativeEnd += onePassFrames;
+      session.segmentEndFrames.push_back(cumulativeEnd);
+    }
+    session.totalFrames += onePassFrames * repeatCount;
+    session.durationMs += onePassDurationMs * repeatCount;
+    engine_.updateRuntimeHandleMembers(handleId,
+                                       {{"dur", session.durationMs},
+                                        {"repeat_left", static_cast<double>(std::max(0, static_cast<int>(session.segmentEndFrames.size()) - 1))}});
+    refreshVariables();
+    return true;
+  }
+
+  if (it != playbackSessions_.end()) {
+    QAudioSink* oldSink = it->second.sink;
+    QBuffer* oldBuffer = it->second.buffer;
+    it->second.sink = nullptr;
+    it->second.buffer = nullptr;
+    playbackSessions_.erase(it);
+    if (oldSink) {
+      oldSink->stop();
+      oldSink->deleteLater();
+    }
+    if (oldBuffer) {
+      oldBuffer->close();
+      oldBuffer->deleteLater();
+    }
+  }
+
+  PlaybackSession session;
+  session.handleId = handleId;
+  session.sampleRate = sampleRate;
+  session.channelCount = channelCount;
+  session.repeatCount = repeatCount;
+  session.durationMs = onePassDurationMs * repeatCount;
+  session.totalFrames = onePassFrames * repeatCount;
+  session.pcmData = std::move(repeatedPcm);
+  int cumulativeEnd = 0;
+  for (int i = 0; i < repeatCount; ++i) {
+    cumulativeEnd += onePassFrames;
+    session.segmentEndFrames.push_back(cumulativeEnd);
+  }
+
+  QAudioFormat fmt;
+  fmt.setSampleRate(session.sampleRate);
+  fmt.setChannelCount(session.channelCount);
+  fmt.setSampleFormat(QAudioFormat::Int16);
+
+  session.buffer = new QBuffer(this);
+  session.buffer->setData(session.pcmData);
+  session.buffer->open(QIODevice::ReadOnly);
+
+  session.sink = new QAudioSink(fmt, this);
+  connect(session.sink, &QAudioSink::stateChanged, this, [this](QAudio::State) {
+    refreshPlaybackHandles();
+  });
+  session.sink->start(session.buffer);
+
+  playbackSessions_[handleId] = std::move(session);
+  engine_.updateRuntimeHandleMembers(handleId,
+                                     {{"fs", static_cast<double>(playbackSessions_[handleId].sampleRate)},
+                                      {"dur", playbackSessions_[handleId].durationMs},
+                                      {"repeat_left", static_cast<double>(std::max(0, static_cast<int>(playbackSessions_[handleId].segmentEndFrames.size()) - 1))},
+                                      {"prog", 0.0}});
+  refreshVariables();
+  return true;
+}
+
+bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
+                                       auxPlaybackCommand command,
+                                       std::string& err) {
+  auto it = playbackSessions_.find(handleId);
+  if (it == playbackSessions_.end()) {
+    err = "Invalid or inactive playback handle.";
+    return false;
+  }
+
+  if (command != auxPlaybackCommand::AUX_PLAYBACK_STOP) {
+    PlaybackSession& session = it->second;
+    switch (command) {
+      case auxPlaybackCommand::AUX_PLAYBACK_PAUSE: {
+        if (session.paused) {
+          return true;
+        }
+        if (varAudioSink_) {
+          varAudioSink_->disconnect(this);
+          varAudioSink_->reset();
+          varAudioSink_->stop();
+          delete varAudioSink_;
+          varAudioSink_ = nullptr;
+        }
+        if (varAudioBuffer_) {
+          varAudioBuffer_->close();
+          delete varAudioBuffer_;
+          varAudioBuffer_ = nullptr;
+        }
+        varPcmData_.clear();
+
+        for (auto& entry : playbackSessions_) {
+          PlaybackSession& other = entry.second;
+          if (other.sink && other.buffer) {
+            const qint64 bytesConsumed =
+                other.pcmData.size() - std::max<qint64>(0, other.buffer->bytesAvailable());
+            other.pausedBytes = std::clamp<qint64>(bytesConsumed, 0, other.pcmData.size());
+          }
+          if (other.buffer) {
+            other.buffer->close();
+          }
+          if (other.sink) {
+            other.sink->disconnect(this);
+            other.sink->reset();
+            other.sink->stop();
+            delete other.sink;
+            other.sink = nullptr;
+          }
+          if (other.buffer) {
+            delete other.buffer;
+            other.buffer = nullptr;
+          }
+          other.paused = true;
+        }
+        refreshVariables();
+        return true;
+      }
+      case auxPlaybackCommand::AUX_PLAYBACK_RESUME: {
+        if (!session.paused) {
+          return true;
+        }
+        if (session.pausedBytes >= session.pcmData.size()) {
+          err = "Invalid or inactive playback handle.";
+          return false;
+        }
+        QAudioFormat fmt;
+        fmt.setSampleRate(session.sampleRate);
+        fmt.setChannelCount(session.channelCount);
+        fmt.setSampleFormat(QAudioFormat::Int16);
+        session.buffer = new QBuffer(this);
+        session.buffer->setData(session.pcmData);
+        session.buffer->open(QIODevice::ReadOnly);
+        session.buffer->seek(session.pausedBytes);
+        session.sink = new QAudioSink(fmt, this);
+        connect(session.sink, &QAudioSink::stateChanged, this, [this](QAudio::State) {
+          refreshPlaybackHandles();
+        });
+        session.sink->start(session.buffer);
+        session.paused = false;
+        refreshVariables();
+        return true;
+      }
+      default:
+        err = "Playback command not available yet.";
+        return false;
+    }
+  }
+
+  if (varAudioSink_) {
+    varAudioSink_->disconnect(this);
+    varAudioSink_->reset();
+    varAudioSink_->stop();
+    delete varAudioSink_;
+    varAudioSink_ = nullptr;
+  }
+  if (varAudioBuffer_) {
+    varAudioBuffer_->close();
+    delete varAudioBuffer_;
+    varAudioBuffer_ = nullptr;
+  }
+  varPcmData_.clear();
+
+  for (auto& entry : playbackSessions_) {
+    PlaybackSession& session = entry.second;
+    engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+    if (session.buffer) {
+      session.buffer->close();
+    }
+    if (session.sink) {
+      session.sink->disconnect(this);
+      session.sink->reset();
+      session.sink->stop();
+      delete session.sink;
+      session.sink = nullptr;
+    }
+    if (session.buffer) {
+      delete session.buffer;
+      session.buffer = nullptr;
+    }
+    session.pcmData.clear();
+  }
+  playbackSessions_.clear();
+  refreshVariables();
+  return true;
+}
+
+void MainWindow::refreshPlaybackHandles() {
+  bool anyUpdated = false;
+  for (auto it = playbackSessions_.begin(); it != playbackSessions_.end();) {
+    PlaybackSession& session = it->second;
+    if (!session.sink) {
+      if (session.paused) {
+        ++it;
+        continue;
+      }
+      it = playbackSessions_.erase(it);
+      continue;
+    }
+
+    const qsizetype bytesPerFrame = session.channelCount * static_cast<int>(sizeof(qint16));
+    const qint64 bytesConsumed = session.buffer
+        ? (session.pcmData.size() - std::max<qint64>(0, session.buffer->bytesAvailable()))
+        : 0;
+    const int framesConsumed = bytesPerFrame > 0
+        ? static_cast<int>(std::clamp<qint64>(bytesConsumed / bytesPerFrame, 0, session.totalFrames))
+        : 0;
+    int completedSegments = 0;
+    while (completedSegments < static_cast<int>(session.segmentEndFrames.size()) &&
+           framesConsumed >= session.segmentEndFrames[static_cast<size_t>(completedSegments)]) {
+      ++completedSegments;
+    }
+    const int repeatLeft = std::max(0, static_cast<int>(session.segmentEndFrames.size()) - completedSegments - 1);
+    const double prog = session.totalFrames > 0
+        ? 100.0 * static_cast<double>(framesConsumed) / static_cast<double>(session.totalFrames)
+        : 100.0;
+
+    engine_.updateRuntimeHandleMembers(session.handleId,
+                                       {{"repeat_left", static_cast<double>(repeatLeft)},
+                                        {"prog", std::clamp(prog, 0.0, 100.0)}});
+    anyUpdated = true;
+
+    if (session.sink->state() == QAudio::IdleState || session.sink->state() == QAudio::StoppedState) {
+      QAudioSink* finishedSink = session.sink;
+      QBuffer* finishedBuffer = session.buffer;
+      engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+      session.sink = nullptr;
+      session.buffer = nullptr;
+      it = playbackSessions_.erase(it);
+      if (finishedSink) {
+        finishedSink->stop();
+        finishedSink->deleteLater();
+      }
+      if (finishedBuffer) {
+        finishedBuffer->close();
+        finishedBuffer->deleteLater();
+      }
+      continue;
+    }
+    ++it;
+  }
+  if (anyUpdated) {
+    refreshVariables();
+  }
+}
+
 void MainWindow::openStructMembersForPath(const QString& path) {
   if (path.isEmpty()) {
     return;
@@ -3388,6 +3899,15 @@ void MainWindow::openStructMembersForPath(const QString& path) {
 
   const auto members = engine_.listStructMembers(path.toStdString());
   if (members.empty()) {
+    const auto handleId = graphicsHandleIdForVariable(path);
+    if (!handleId.has_value()) {
+      return;
+    }
+
+    auto* w = new TextObjectWindow(path, graphicsHandleDump(*handleId));
+    w->setAttribute(Qt::WA_DeleteOnClose, true);
+    trackWindow(path, w, WindowKind::Text);
+    w->show();
     return;
   }
 
@@ -3458,6 +3978,310 @@ SignalGraphWindow* MainWindow::findSignalGraphWindow(const QString& varName, aux
     }
   }
   return nullptr;
+}
+
+SignalGraphWindow* MainWindow::graphWindowForHandle(std::uint64_t handleId) const {
+  if (auto* owner = graphicsManager_.findFigureById(handleId)) {
+    return owner;
+  }
+  if (auto* owner = graphicsManager_.findAxesOwner(handleId)) {
+    return owner;
+  }
+  for (auto it = scopedWindows_.rbegin(); it != scopedWindows_.rend(); ++it) {
+    if (it->kind != WindowKind::Graph || !it->window) {
+      continue;
+    }
+    if (auto* g = qobject_cast<SignalGraphWindow*>(it->window.data())) {
+      if (g->graphicsModel().containsLine(handleId) || g->graphicsModel().containsText(handleId)) {
+        return g;
+      }
+    }
+  }
+  return nullptr;
+}
+
+std::optional<std::uint64_t> MainWindow::graphicsHandleIdForVariable(const QString& varName) const {
+  if (varName.isEmpty()) {
+    return std::nullopt;
+  }
+  const auto scalar = engine_.getScalarValue(varName.toStdString());
+  if (!scalar.has_value()) {
+    return std::nullopt;
+  }
+  const auto rounded = static_cast<long long>(std::llround(*scalar));
+  if (rounded <= 0 || std::fabs(*scalar - static_cast<double>(rounded)) > 1e-9) {
+    return std::nullopt;
+  }
+  const auto handleId = static_cast<std::uint64_t>(rounded);
+  return graphWindowForHandle(handleId) ? std::optional<std::uint64_t>(handleId) : std::nullopt;
+}
+
+std::optional<std::vector<std::uint64_t>> MainWindow::graphicsHandleReferenceIds(std::uint64_t handleId, const QString& prop) const {
+  SignalGraphWindow* owner = graphWindowForHandle(handleId);
+  if (!owner) {
+    return std::nullopt;
+  }
+
+  const auto& model = owner->graphicsModel();
+  const QString key = prop.trimmed().toLower();
+
+  auto commonRefs = [&](const GraphicsObjectCommon& common) -> std::optional<std::vector<std::uint64_t>> {
+    if (key == "parent") {
+      return std::vector<std::uint64_t>(common.parentId == 0 ? 0 : 1, common.parentId);
+    }
+    if (key == "children") {
+      return common.children;
+    }
+    return std::nullopt;
+  };
+
+  if (handleId == model.figure().common.id) {
+    return commonRefs(model.figure().common);
+  }
+  if (const auto axes = std::find_if(model.axes().begin(), model.axes().end(), [handleId](const GraphicsAxesHandle& ax) {
+        return ax.common.id == handleId;
+      }); axes != model.axes().end()) {
+    return commonRefs(axes->common);
+  }
+  if (const auto* line = model.lineById(handleId)) {
+    return commonRefs(line->common);
+  }
+  for (const auto& text : model.texts()) {
+    if (text.common.id == handleId) {
+      return commonRefs(text.common);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::vector<std::uint64_t>> MainWindow::graphicsHandlePathIds(const QString& path) const {
+  if (path.isEmpty()) {
+    return std::nullopt;
+  }
+
+  const int brace = path.lastIndexOf('{');
+  if (brace > 0 && path.endsWith('}')) {
+    bool ok = false;
+    const int oneBased = path.mid(brace + 1, path.size() - brace - 2).toInt(&ok);
+    if (!ok || oneBased <= 0) {
+      return std::nullopt;
+    }
+    const auto baseIds = graphicsHandlePathIds(path.left(brace));
+    if (!baseIds.has_value()) {
+      return std::nullopt;
+    }
+    const size_t index = static_cast<size_t>(oneBased - 1);
+    if (index >= baseIds->size()) {
+      return std::vector<std::uint64_t>{};
+    }
+    return std::vector<std::uint64_t>{(*baseIds)[index]};
+  }
+
+  if (const auto handleId = graphicsHandleIdForVariable(path); handleId.has_value()) {
+    return std::vector<std::uint64_t>{*handleId};
+  }
+
+  const int dot = path.lastIndexOf('.');
+  if (dot <= 0) {
+    return std::nullopt;
+  }
+  const QString root = path.left(dot);
+  const QString prop = path.mid(dot + 1);
+  const auto rootIds = graphicsHandlePathIds(root);
+  if (!rootIds.has_value() || rootIds->size() != 1) {
+    return std::nullopt;
+  }
+  return graphicsHandleReferenceIds(rootIds->front(), prop);
+}
+
+std::vector<VarSnapshot> MainWindow::graphicsHandleMembersForId(std::uint64_t handleId) const {
+  std::vector<VarSnapshot> out;
+
+  auto makeSnapshot = [&](const QString& name, const QString& typeTag, const QString& size, const QString& preview) {
+    VarSnapshot snap;
+    snap.name = name.toStdString();
+    snap.typeTag = typeTag.toStdString();
+    snap.size = size.toStdString();
+    snap.preview = preview.toStdString();
+    return snap;
+  };
+
+  const QString typeValue = graphicsHandleProperty(handleId, QStringLiteral("type"));
+  if (typeValue.startsWith(QStringLiteral("Error:"))) {
+    return out;
+  }
+
+  const QString typeName = unquoteStringLiteral(typeValue);
+  out.push_back(makeSnapshot(QStringLiteral("type"), QStringLiteral("TEXT"), QStringLiteral("1"), typeValue));
+  out.push_back(makeSnapshot(QStringLiteral("pos"), QStringLiteral("VECT"), QStringLiteral("4"), graphicsHandleProperty(handleId, QStringLiteral("pos"))));
+  out.push_back(makeSnapshot(QStringLiteral("color"), QStringLiteral("VECT"), QStringLiteral("3"), graphicsHandleProperty(handleId, QStringLiteral("color"))));
+  out.push_back(makeSnapshot(QStringLiteral("visible"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("visible"))));
+
+  if (const auto parentIds = graphicsHandleReferenceIds(handleId, QStringLiteral("parent")); parentIds.has_value()) {
+    const QString size = QString::number(parentIds->size());
+    const QString preview = parentIds->empty() ? QStringLiteral("[]") : graphicsHandleProperty(handleId, QStringLiteral("parent"));
+    out.push_back(makeSnapshot(QStringLiteral("parent"), QStringLiteral("HNDL"), size, preview));
+  }
+  if (const auto childIds = graphicsHandleReferenceIds(handleId, QStringLiteral("children")); childIds.has_value()) {
+    out.push_back(makeSnapshot(QStringLiteral("children"), QStringLiteral("HNDL"),
+                               QString::number(childIds->size()),
+                               graphicsHandleProperty(handleId, QStringLiteral("children"))));
+  }
+
+  if (typeName == "axes") {
+    out.push_back(makeSnapshot(QStringLiteral("box"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("box"))));
+    out.push_back(makeSnapshot(QStringLiteral("linewidth"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("linewidth"))));
+    out.push_back(makeSnapshot(QStringLiteral("xlim"), QStringLiteral("VECT"), QStringLiteral("2"), graphicsHandleProperty(handleId, QStringLiteral("xlim"))));
+    out.push_back(makeSnapshot(QStringLiteral("ylim"), QStringLiteral("VECT"), QStringLiteral("2"), graphicsHandleProperty(handleId, QStringLiteral("ylim"))));
+    out.push_back(makeSnapshot(QStringLiteral("fontname"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontname"))));
+    out.push_back(makeSnapshot(QStringLiteral("fontsize"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontsize"))));
+    out.push_back(makeSnapshot(QStringLiteral("xscale"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("xscale"))));
+    out.push_back(makeSnapshot(QStringLiteral("yscale"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("yscale"))));
+    out.push_back(makeSnapshot(QStringLiteral("xgrid"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("xgrid"))));
+    out.push_back(makeSnapshot(QStringLiteral("ygrid"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("ygrid"))));
+  } else if (typeName == "line") {
+    out.push_back(makeSnapshot(QStringLiteral("xdata"), QStringLiteral("VECT"), QStringLiteral("?"), graphicsHandleProperty(handleId, QStringLiteral("xdata"))));
+    out.push_back(makeSnapshot(QStringLiteral("ydata"), QStringLiteral("VECT"), QStringLiteral("?"), graphicsHandleProperty(handleId, QStringLiteral("ydata"))));
+    out.push_back(makeSnapshot(QStringLiteral("linewidth"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("linewidth"))));
+    out.push_back(makeSnapshot(QStringLiteral("linestyle"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("linestyle"))));
+    out.push_back(makeSnapshot(QStringLiteral("marker"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("marker"))));
+    out.push_back(makeSnapshot(QStringLiteral("markersize"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("markersize"))));
+  } else if (typeName == "text") {
+    out.push_back(makeSnapshot(QStringLiteral("fontname"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontname"))));
+    out.push_back(makeSnapshot(QStringLiteral("fontsize"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontsize"))));
+    out.push_back(makeSnapshot(QStringLiteral("string"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("string"))));
+  }
+
+  return out;
+}
+
+std::vector<VarSnapshot> MainWindow::graphicsHandleArrayMembers(const std::vector<std::uint64_t>& ids) const {
+  std::vector<VarSnapshot> out;
+  out.reserve(ids.size());
+  for (size_t i = 0; i < ids.size(); ++i) {
+    VarSnapshot snap;
+    snap.name = std::to_string(i + 1);
+    snap.typeTag = "HNDL";
+    snap.size = "1";
+    snap.preview = QString::number(ids[i]).toStdString();
+    out.push_back(std::move(snap));
+  }
+  return out;
+}
+
+QString MainWindow::graphicsHandleProperty(std::uint64_t handleId, const QString& prop) const {
+  SignalGraphWindow* owner = graphWindowForHandle(handleId);
+  if (!owner) {
+    return QString("Error: graphics handle not found: %1").arg(handleId);
+  }
+
+  const auto& model = owner->graphicsModel();
+  const QString key = prop.trimmed().toLower();
+  const auto figureId = model.figure().common.id;
+
+  auto commonGetter = [&](const GraphicsObjectCommon& common) -> QString {
+    if (key == "pos") return formatDoubleArray4(common.pos);
+    if (key == "color") return formatColor(common.color);
+    if (key == "visible") return common.visible ? QStringLiteral("1") : QStringLiteral("0");
+    if (key == "parent") return common.parentId == 0 ? QStringLiteral("[]") : QString::number(common.parentId);
+    if (key == "children") return formatChildren(common.children);
+    return QString();
+  };
+
+  if (handleId == figureId) {
+    const auto& fig = model.figure();
+    if (key == "type") return QStringLiteral("\"figure\"");
+    if (key == "pos") return formatDoubleArray4(owner->currentFigurePos());
+    if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
+    return QString("Error: unsupported figure property: %1").arg(prop);
+  }
+  if (const auto axes = std::find_if(model.axes().begin(), model.axes().end(), [handleId](const GraphicsAxesHandle& ax) {
+        return ax.common.id == handleId;
+      }); axes != model.axes().end()) {
+    if (key == "type") return QStringLiteral("\"axes\"");
+    if (const QString value = commonGetter(axes->common); !value.isEmpty()) return value;
+    if (key == "box") return axes->box ? QStringLiteral("1") : QStringLiteral("0");
+    if (key == "linewidth") return QString::number(axes->lineWidth);
+    if (key == "xlim") return formatDoubleArray2(axes->xlim);
+    if (key == "ylim") return formatDoubleArray2(axes->ylim);
+    if (key == "fontname") return QString("\"%1\"").arg(axes->fontName);
+    if (key == "fontsize") return QString::number(axes->fontSize);
+    if (key == "xscale") return QString("\"%1\"").arg(axes->xscale);
+    if (key == "yscale") return QString("\"%1\"").arg(axes->yscale);
+    if (key == "xgrid") return axes->xgrid ? QStringLiteral("1") : QStringLiteral("0");
+    if (key == "ygrid") return axes->ygrid ? QStringLiteral("1") : QStringLiteral("0");
+    return QString("Error: unsupported axes property: %1").arg(prop);
+  }
+  if (const auto* line = model.lineById(handleId)) {
+    if (key == "type") return QStringLiteral("\"line\"");
+    if (const QString value = commonGetter(line->common); !value.isEmpty()) return value;
+    if (key == "xdata") return formatDoubleVector(line->xdata);
+    if (key == "ydata") return formatDoubleVector(line->ydata);
+    if (key == "linewidth") return QString::number(line->lineWidth);
+    if (key == "linestyle") return QString("\"%1\"").arg(line->lineStyle);
+    if (key == "marker") return QString("\"%1\"").arg(line->marker);
+    if (key == "markersize") return QString::number(line->markerSize);
+    return QString("Error: unsupported line property: %1").arg(prop);
+  }
+  if (const auto& texts = model.texts(); std::any_of(texts.begin(), texts.end(), [handleId](const GraphicsTextHandle& text) {
+        return text.common.id == handleId;
+      })) {
+    const auto* text = [&]() -> const GraphicsTextHandle* {
+      for (const auto& item : texts) {
+        if (item.common.id == handleId) return &item;
+      }
+      return nullptr;
+    }();
+    if (!text) {
+      return QString("Error: graphics handle not found: %1").arg(handleId);
+    }
+    if (key == "type") return QStringLiteral("\"text\"");
+    if (const QString value = commonGetter(text->common); !value.isEmpty()) return value;
+    if (key == "fontname") return QString("\"%1\"").arg(text->fontName);
+    if (key == "fontsize") return QString::number(text->fontSize);
+    if (key == "string") return QString("\"%1\"").arg(text->stringValue);
+    return QString("Error: unsupported text property: %1").arg(prop);
+  }
+  return QString("Error: graphics handle not found: %1").arg(handleId);
+}
+
+QString MainWindow::graphicsHandleDump(std::uint64_t handleId) const {
+  const QString typeValue = graphicsHandleProperty(handleId, QStringLiteral("type"));
+  if (typeValue.startsWith(QStringLiteral("Error:"))) {
+    return typeValue;
+  }
+
+  const QString typeName = unquoteStringLiteral(typeValue);
+  QStringList props = {
+      QStringLiteral("type"),
+      QStringLiteral("pos"),
+      QStringLiteral("color"),
+      QStringLiteral("visible"),
+      QStringLiteral("parent"),
+      QStringLiteral("children"),
+  };
+  if (typeName == "axes") {
+    props << QStringLiteral("box") << QStringLiteral("linewidth") << QStringLiteral("xlim")
+          << QStringLiteral("ylim") << QStringLiteral("fontname") << QStringLiteral("fontsize")
+          << QStringLiteral("xscale") << QStringLiteral("yscale") << QStringLiteral("xgrid")
+          << QStringLiteral("ygrid");
+  } else if (typeName == "line") {
+    props << QStringLiteral("xdata") << QStringLiteral("ydata") << QStringLiteral("linewidth")
+          << QStringLiteral("linestyle") << QStringLiteral("marker") << QStringLiteral("markersize");
+  } else if (typeName == "text") {
+    props << QStringLiteral("fontname") << QStringLiteral("fontsize") << QStringLiteral("string");
+  }
+
+  QString out = QString("type = 0x%1, [Handle] %2\n")
+                    .arg(QString::number(kDisplayTypebitHandle, 16).rightJustified(4, QLatin1Char('0')))
+                    .arg(handleId);
+  for (const QString& property : props) {
+    out += QString(".%1 = %2").arg(property, graphicsHandleProperty(handleId, property));
+    if (property != props.back()) {
+      out += QLatin1Char('\n');
+    }
+  }
+  return out;
 }
 
 void MainWindow::focusWindow(QWidget* window) const {

@@ -18,7 +18,7 @@ CellMembersWindow::CellMembersWindow(const QString& cellPath, const std::vector<
   auto* layout = new QVBoxLayout(this);
   tree_ = new QTreeWidget(this);
   tree_->setColumnCount(4);
-  tree_->setHeaderLabels({"Index", "Type/dbRMS", "Size", "Content"});
+  tree_->setHeaderLabels({"Index", "Type/dBRMS", "Size", "Content"});
   tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
   tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);

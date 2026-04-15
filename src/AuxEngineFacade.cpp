@@ -32,6 +32,28 @@ constexpr uint16_t kTypeStrut = 0x2000;
 constexpr uint16_t kTypeHandle = 0x4000;
 constexpr double kRmsDbOffset = 3.0103;
 
+std::string filterCapturedNoise(std::string s) {
+  if (s.empty()) {
+    return s;
+  }
+  std::stringstream input(s);
+  std::string line;
+  std::string out;
+  while (std::getline(input, line)) {
+    if (line.find("TSMSendMessageToUIServer: CFMessagePortSendRequest FAILED(-1)") != std::string::npos) {
+      continue;
+    }
+    if (!out.empty()) {
+      out.push_back('\n');
+    }
+    out += line;
+  }
+  if (!out.empty() && s.back() == '\n') {
+    out.push_back('\n');
+  }
+  return out;
+}
+
 std::string trimAscii(std::string s) {
   const auto b = s.find_first_not_of(" \t\r\n");
   if (b == std::string::npos) {
@@ -50,6 +72,20 @@ std::string scalarOnlyPreview(const std::string& preview) {
     }
   }
   return p;
+}
+
+bool isScalarShape(uint16_t type) {
+  return (type & 0x000F) == 1;
+}
+
+std::string structFaceOnlyPreview(const std::string& preview) {
+  std::string p = trimAscii(preview);
+  if (p.rfind("{face}", 0) != 0) {
+    return p;
+  }
+  const auto sep = p.find(';');
+  const std::string firstSegment = sep == std::string::npos ? p.substr(6) : p.substr(6, sep - 6);
+  return scalarOnlyPreview(firstSegment);
 }
 
 std::string shortTypeTag(uint16_t type) {
@@ -108,6 +144,98 @@ std::string makeTempPathName() {
   static std::atomic<unsigned long long> counter{0};
   const unsigned long long id = counter.fetch_add(1, std::memory_order_relaxed) + 1;
   return "__auxlab2_tmp_path__" + std::to_string(id);
+}
+
+std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
+  if (!obj) {
+    return std::nullopt;
+  }
+
+  const int channels = aux_num_channels(obj);
+  if (channels <= 0) {
+    return std::nullopt;
+  }
+
+  struct SegmentCopy {
+    int startSample = 0;
+    std::vector<double> samples;
+  };
+
+  SignalData data;
+  data.isAudio = aux_is_audio(obj);
+  data.sampleRate = 0;
+
+  double minStartMs = std::numeric_limits<double>::infinity();
+  std::vector<std::vector<SegmentCopy>> byChannel(static_cast<size_t>(channels));
+
+  for (int ch = 0; ch < channels; ++ch) {
+    const int segCount = aux_num_segments(obj, ch);
+    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
+      AuxSignal seg{};
+      if (!aux_get_segment(obj, ch, segIndex, seg)) {
+        continue;
+      }
+      minStartMs = std::min(minStartMs, seg.tmark);
+      if (seg.fs > 0) {
+        data.sampleRate = seg.fs;
+      }
+
+      SegmentCopy copy;
+      copy.samples.resize(seg.nSamples);
+      if (seg.buf && seg.nSamples > 0) {
+        std::copy(seg.buf, seg.buf + seg.nSamples, copy.samples.begin());
+      }
+      byChannel[static_cast<size_t>(ch)].push_back(std::move(copy));
+    }
+  }
+
+  if (!std::isfinite(minStartMs)) {
+    return std::nullopt;
+  }
+  if (data.sampleRate <= 0) {
+    data.sampleRate = defaultSampleRate > 0 ? defaultSampleRate : 1;
+  }
+
+  int globalTotalSamples = 0;
+  for (int ch = 0; ch < channels; ++ch) {
+    const int segCount = aux_num_segments(obj, ch);
+    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
+      AuxSignal seg{};
+      if (!aux_get_segment(obj, ch, segIndex, seg)) {
+        continue;
+      }
+      const int startSample = std::max(0, static_cast<int>(std::llround((seg.tmark - minStartMs) * data.sampleRate / 1000.0)));
+      byChannel[static_cast<size_t>(ch)][static_cast<size_t>(segIndex)].startSample = startSample;
+      globalTotalSamples = std::max(globalTotalSamples, startSample + static_cast<int>(seg.nSamples));
+    }
+  }
+
+  if (globalTotalSamples <= 0) {
+    return std::nullopt;
+  }
+
+  data.channels.reserve(static_cast<size_t>(channels));
+  for (int ch = 0; ch < channels; ++ch) {
+    ChannelData channel;
+    channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+    for (const auto& seg : byChannel[static_cast<size_t>(ch)]) {
+      if (seg.samples.empty()) {
+        continue;
+      }
+      const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
+      if (start >= channel.samples.size()) {
+        continue;
+      }
+      const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
+      std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
+    }
+    data.channels.push_back(std::move(channel));
+  }
+
+  if (data.isAudio) {
+    data.startTimeSec = minStartMs / 1000.0;
+  }
+  return data;
 }
 
 class ScopedPathBinding {
@@ -407,11 +535,30 @@ bool AuxEngineFacade::installGraphicsBackend(const auxGraphicsBackend& backend, 
   return true;
 }
 
+bool AuxEngineFacade::installPlaybackBackend(const auxPlaybackBackend& backend, std::string& err) {
+  if (!rootCtx_) {
+    err = "AUX engine is not initialized.";
+    return false;
+  }
+  if (aux_install_playback_backend(rootCtx_, backend) != 0) {
+    err = "Failed to install playback backend.";
+    return false;
+  }
+  return true;
+}
+
 void AuxEngineFacade::clearGraphicsBackend() {
   if (!rootCtx_) {
     return;
   }
   aux_clear_graphics_backend(rootCtx_);
+}
+
+void AuxEngineFacade::clearPlaybackBackend() {
+  if (!rootCtx_) {
+    return;
+  }
+  aux_clear_playback_backend(rootCtx_);
 }
 
 EvalResult AuxEngineFacade::eval(const std::string& command) {
@@ -427,7 +574,7 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
   {
     ScopedStdCapture cap;
     out.status = aux_eval(&activeCtx_, command, cfg_, preview);
-    captured = cap.output();
+    captured = filterCapturedNoise(cap.output());
   }
 
   out.output = captured;
@@ -494,8 +641,10 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
     snap.type = aux_type(obj);
     snap.typeTag = shortTypeTag(snap.type);
     aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
+    if (snap.typeTag == "SCLR" || (snap.typeTag == "HNDL" && isScalarShape(snap.type))) {
       snap.preview = scalarOnlyPreview(snap.preview);
+    } else if (snap.typeTag == "STRC") {
+      snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
       snap.rms = formatRmsDb(obj);
@@ -533,8 +682,10 @@ std::vector<VarSnapshot> AuxEngineFacade::listStructMembers(const std::string& p
     snap.isAudio = aux_is_audio(kv.second);
     snap.channels = aux_num_channels(kv.second);
     aux_describe_var(ctx, kv.second, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
+    if (snap.typeTag == "SCLR" || (snap.typeTag == "HNDL" && isScalarShape(snap.type))) {
       snap.preview = scalarOnlyPreview(snap.preview);
+    } else if (snap.typeTag == "STRC") {
+      snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
       snap.rms = formatRmsDb(kv.second);
@@ -573,8 +724,10 @@ std::vector<VarSnapshot> AuxEngineFacade::listCellMembers(const std::string& pat
     snap.isAudio = aux_is_audio(obj);
     snap.channels = aux_num_channels(obj);
     aux_describe_var(ctx, obj, cfg_, snap.type, snap.size, snap.preview);
-    if (snap.typeTag == "SCLR" || snap.typeTag == "HNDL") {
+    if (snap.typeTag == "SCLR" || (snap.typeTag == "HNDL" && isScalarShape(snap.type))) {
       snap.preview = scalarOnlyPreview(snap.preview);
+    } else if (snap.typeTag == "STRC") {
+      snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
       snap.rms = formatRmsDb(obj);
@@ -595,45 +748,7 @@ std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varN
   if (!obj) {
     return std::nullopt;
   }
-
-  const int channels = aux_num_channels(obj);
-  if (channels <= 0) {
-    return std::nullopt;
-  }
-
-  SignalData data;
-  data.isAudio = aux_is_audio(obj);
-  data.sampleRate = aux_get_fs(ctx);
-  double minStartMs = std::numeric_limits<double>::infinity();
-
-  data.channels.reserve(static_cast<size_t>(channels));
-  for (int ch = 0; ch < channels; ++ch) {
-    AuxSignal seg{};
-    if (aux_get_segment(obj, ch, 0, seg)) {
-      minStartMs = std::min(minStartMs, seg.tmark);
-      if (data.sampleRate <= 0 && seg.fs > 0) {
-        data.sampleRate = seg.fs;
-      }
-    }
-
-    const auto len = aux_flatten_channel_length(obj, ch);
-    if (len == 0) {
-      continue;
-    }
-
-    ChannelData channel;
-    channel.samples.resize(len);
-    aux_flatten_channel(obj, ch, channel.samples.data(), channel.samples.size());
-    data.channels.push_back(std::move(channel));
-  }
-
-  if (data.channels.empty()) {
-    return std::nullopt;
-  }
-  if (data.isAudio && std::isfinite(minStartMs)) {
-    data.startTimeSec = minStartMs / 1000.0;
-  }
-  return data;
+  return buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
 }
 
 std::optional<QVector<double>> AuxEngineFacade::getNumericVector(const std::string& varName) const {
@@ -928,6 +1043,27 @@ bool AuxEngineFacade::deleteVar(const std::string& varName) {
     return false;
   }
   return aux_del_var(activeCtx_, varName) == 0;
+}
+
+bool AuxEngineFacade::setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids) {
+  if (!activeCtx_ || varName.empty()) {
+    return false;
+  }
+  return aux_set_handle_values(activeCtx_, varName, ids) == 0;
+}
+
+bool AuxEngineFacade::updateRuntimeHandleMembers(std::uint64_t handleId, const std::map<std::string, double>& members) {
+  if (!activeCtx_ || handleId == 0 || members.empty()) {
+    return false;
+  }
+  bool updated = false;
+  if (aux_update_runtime_handle_members(activeCtx_, handleId, members) == 0) {
+    updated = true;
+  }
+  if (rootCtx_ && rootCtx_ != activeCtx_ && aux_update_runtime_handle_members(rootCtx_, handleId, members) == 0) {
+    updated = true;
+  }
+  return updated;
 }
 
 std::string AuxEngineFacade::engineVersion() const {

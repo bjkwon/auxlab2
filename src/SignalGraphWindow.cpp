@@ -8,6 +8,7 @@
 #include <QPainterPath>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QShortcut>
 
 #include <algorithm>
 #include <cmath>
@@ -221,11 +222,30 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName,
     viewStart_ = 0;
     viewLen_ = std::max(1, totalTimelineSamples(data_));
     fftPaneOffsets_.assign(data_.channels.size(), QPoint(0, 0));
+    rangeHistory_.push_back({viewStart_, viewStart_ + viewLen_});
+    rangeHistoryIndex_ = 0;
   }
+  syncVisibleXRangeToAxes();
   updateYRange();
 
   playheadTimer_.setInterval(16);
   connect(&playheadTimer_, &QTimer::timeout, this, &SignalGraphWindow::updatePlayhead);
+
+  const auto bindRangeShortcut = [this](const QKeySequence& sequence, auto handler) {
+    auto* shortcut = new QShortcut(sequence, this);
+    connect(shortcut, &QShortcut::activated, this, handler);
+  };
+
+#ifdef Q_OS_MAC
+  const Qt::KeyboardModifier rangeModifier = Qt::ControlModifier;
+#else
+  const Qt::KeyboardModifier rangeModifier = Qt::AltModifier;
+#endif
+  bindRangeShortcut(QKeySequence(rangeModifier | Qt::Key_Left), &SignalGraphWindow::anchorRangeStartToZero);
+  bindRangeShortcut(QKeySequence(rangeModifier | Qt::Key_Right), &SignalGraphWindow::anchorRangeEndToSignalEnd);
+  bindRangeShortcut(QKeySequence(rangeModifier | Qt::Key_Slash), &SignalGraphWindow::resetRangeToFull);
+  bindRangeShortcut(QKeySequence(rangeModifier | Qt::Key_Comma), [this]() { stepRangeHistory(-1); });
+  bindRangeShortcut(QKeySequence(rangeModifier | Qt::Key_Period), [this]() { stepRangeHistory(+1); });
 
   fftMoveHoldTimer_.setSingleShot(true);
   fftMoveHoldTimer_.setInterval(2000);
@@ -277,6 +297,9 @@ void SignalGraphWindow::updateData(const SignalData& data) {
       viewStart_ = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
       viewLen_ = std::clamp(viewLen_, 1, std::max(1, totalLen));
     }
+    rangeHistory_.clear();
+    rangeHistory_.push_back({viewStart_, viewStart_ + viewLen_});
+    rangeHistoryIndex_ = 0;
   }
   if (fftPaneOffsets_.size() < data_.channels.size()) {
     fftPaneOffsets_.resize(data_.channels.size(), QPoint(0, 0));
@@ -286,6 +309,7 @@ void SignalGraphWindow::updateData(const SignalData& data) {
   if (showFftOverlay_) {
     ensureFftData();
   }
+  syncVisibleXRangeToAxes();
   updateYRange();
   invalidateStaticLayer();
   update();
@@ -303,11 +327,7 @@ std::uint64_t SignalGraphWindow::addLine(std::uint64_t axesId, const QVector<dou
   if (lineId == 0) {
     return 0;
   }
-  viewStart_ = 0;
-  viewLen_ = std::max(viewLen_, static_cast<int>(xdata.size()));
-  updateYRange();
-  invalidateStaticLayer();
-  update();
+  applyRange({0, std::max(viewLen_, static_cast<int>(xdata.size()))});
   return lineId;
 }
 
@@ -417,19 +437,97 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
     frac = std::clamp(frac, 0.0, 1.0);
     int sample = playingRange_.start + static_cast<int>(span * frac);
     sample = std::clamp(sample, viewStart_, std::max(viewStart_, viewStart_ + viewLen_ - 1));
-    const int x = sampleToX(plot, sample);
     p.setPen(QPen(QColor(255, 230, 120), 1));
-    p.drawLine(x, plot.top(), x, plot.bottom());
+    for (const auto& axes : graphics_.axes()) {
+      if (!axes.common.visible) {
+        continue;
+      }
+      const QRect axesRect = axesRectForPlot(axes, plot);
+      const int x = sampleToX(axesRect, sample);
+      p.drawLine(x, axesRect.top(), x, axesRect.bottom());
+    }
   }
 
   drawFftOverlays(p, plot);
   drawStatusBar(p);
 }
 
+SignalGraphWindow::Range SignalGraphWindow::clampRange(const Range& range) const {
+  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  const int start = std::clamp(range.start, 0, std::max(0, totalLen - 1));
+  const int end = std::clamp(range.end, start + 1, totalLen);
+  return {start, end};
+}
+
+SignalGraphWindow::Range SignalGraphWindow::fullRange() const {
+  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  return {0, totalLen};
+}
+
+void SignalGraphWindow::recordRangeHistory(const Range& range) {
+  const Range clamped = clampRange(range);
+  if (!rangeHistory_.empty() && rangeHistoryIndex_ >= 0 &&
+      rangeHistoryIndex_ < static_cast<int>(rangeHistory_.size())) {
+    const Range& current = rangeHistory_[static_cast<size_t>(rangeHistoryIndex_)];
+    if (current.start == clamped.start && current.end == clamped.end) {
+      return;
+    }
+  }
+  if (rangeHistoryIndex_ + 1 < static_cast<int>(rangeHistory_.size())) {
+    rangeHistory_.erase(rangeHistory_.begin() + rangeHistoryIndex_ + 1, rangeHistory_.end());
+  }
+  rangeHistory_.push_back(clamped);
+  rangeHistoryIndex_ = static_cast<int>(rangeHistory_.size()) - 1;
+}
+
+void SignalGraphWindow::applyRange(const Range& range, bool recordHistory) {
+  if (data_.channels.empty()) {
+    return;
+  }
+  const Range clamped = clampRange(range);
+  viewStart_ = clamped.start;
+  viewLen_ = std::max(1, clamped.end - clamped.start);
+  if (recordHistory) {
+    recordRangeHistory(clamped);
+  }
+  handlePlaybackAfterRangeChange();
+  syncVisibleXRangeToAxes();
+  updateYRange();
+  invalidateStaticLayer();
+  update();
+}
+
+bool SignalGraphWindow::canStepRangeHistory(int delta) const {
+  const int next = rangeHistoryIndex_ + delta;
+  return next >= 0 && next < static_cast<int>(rangeHistory_.size());
+}
+
+void SignalGraphWindow::stepRangeHistory(int delta) {
+  if (!canStepRangeHistory(delta)) {
+    return;
+  }
+  rangeHistoryIndex_ += delta;
+  applyRange(rangeHistory_[static_cast<size_t>(rangeHistoryIndex_)], false);
+}
+
+void SignalGraphWindow::anchorRangeStartToZero() {
+  applyRange({0, viewStart_ + std::max(1, viewLen_)});
+}
+
+void SignalGraphWindow::anchorRangeEndToSignalEnd() {
+  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  const int currentLen = std::max(1, viewLen_);
+  applyRange({totalLen - currentLen, totalLen});
+}
+
+void SignalGraphWindow::resetRangeToFull() {
+  applyRange(fullRange());
+}
+
 void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
   const bool closeShortcut =
 #ifdef Q_OS_MAC
-      ((event->modifiers() & Qt::MetaModifier) && event->key() == Qt::Key_W);
+      ((event->modifiers() & Qt::ControlModifier) && event->key() == Qt::Key_W);
 #else
       ((event->modifiers() & Qt::ControlModifier) && event->key() == Qt::Key_W);
 #endif
@@ -441,6 +539,39 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
 
   if (!workspaceActive_) {
     return;
+  }
+
+#ifdef Q_OS_MAC
+  const bool rangeShortcut = (event->modifiers() & Qt::ControlModifier);
+#else
+  const bool rangeShortcut = (event->modifiers() & Qt::AltModifier);
+#endif
+
+  if (rangeShortcut) {
+    switch (event->key()) {
+      case Qt::Key_Left:
+        anchorRangeStartToZero();
+        event->accept();
+        return;
+      case Qt::Key_Right:
+        anchorRangeEndToSignalEnd();
+        event->accept();
+        return;
+      case Qt::Key_Slash:
+        resetRangeToFull();
+        event->accept();
+        return;
+      case Qt::Key_Comma:
+        stepRangeHistory(-1);
+        event->accept();
+        return;
+      case Qt::Key_Period:
+        stepRangeHistory(+1);
+        event->accept();
+        return;
+      default:
+        break;
+    }
   }
 
   switch (event->key()) {
@@ -480,11 +611,7 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Enter: {
       const auto sel = normalizedSelection();
       if (sel.end > sel.start) {
-        viewStart_ = std::max(0, sel.start);
-        viewLen_ = std::max(2, sel.end - sel.start + 1);
-        updateYRange();
-        invalidateStaticLayer();
-        update();
+        applyRange({std::max(0, sel.start), std::max(0, sel.end + 1)});
       }
       break;
     }
@@ -595,7 +722,11 @@ QRect SignalGraphWindow::axesRectForPlot(const GraphicsAxesHandle& axes, const Q
 void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes, const GraphicsLineHandle& line) {
   const QVector<double>& xdata = line.xdata;
   const QVector<double>& ydata = line.ydata;
-  if (ydata.isEmpty() || xdata.isEmpty() || xdata.size() != ydata.size() || viewLen_ <= 0) {
+  const bool deriveAudioX = data_.isAudio && data_.sampleRate > 0 && xdata.isEmpty();
+  if (ydata.isEmpty() || viewLen_ <= 0) {
+    return;
+  }
+  if (!deriveAudioX && (xdata.isEmpty() || xdata.size() != ydata.size())) {
     return;
   }
 
@@ -608,12 +739,18 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
 
   int from = -1;
   int to = -1;
-  for (int i = 0; i < xdata.size(); ++i) {
-    if (xdata[i] >= xmin && xdata[i] <= xmax) {
-      if (from < 0) {
-        from = i;
+  if (deriveAudioX) {
+    const int totalLen = ydata.size();
+    from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
+    to = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
+  } else {
+    for (int i = 0; i < xdata.size(); ++i) {
+      if (xdata[i] >= xmin && xdata[i] <= xmax) {
+        if (from < 0) {
+          from = i;
+        }
+        to = i + 1;
       }
-      to = i + 1;
     }
   }
   if (from < 0 || to <= from) {
@@ -632,10 +769,15 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
     bool first = true;
     QVector<QPointF> markerPoints;
     for (int i = from; i < to; ++i) {
-      const double xNorm = (xdata[i] - xmin) / xspan;
       const double y = ydata[i];
       const double yNorm = (y - yminAxis) / yspan;
-      const double px = area.left() + xNorm * area.width();
+      double px = 0.0;
+      if (deriveAudioX) {
+        px = sampleToX(area, i);
+      } else {
+        const double xNorm = (xdata[i] - xmin) / xspan;
+        px = area.left() + xNorm * area.width();
+      }
       const double py = area.bottom() - yNorm * area.height();
       if (first) {
         path.moveTo(px, py);
@@ -660,19 +802,33 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
 
   QVector<QPointF> markerPoints;
   for (int x = 0; x < width; ++x) {
-    const double binStart = xmin + (xspan * x) / width;
-    const double binEnd = xmin + (xspan * (x + 1)) / width;
     double vmin = std::numeric_limits<double>::max();
     double vmax = std::numeric_limits<double>::lowest();
     bool any = false;
-    for (int i = from; i < to; ++i) {
-      if (xdata[i] < binStart || xdata[i] > binEnd) {
-        continue;
+    if (deriveAudioX) {
+      const int total = std::max(1, viewLen_ - 1);
+      const int binStartSample = viewStart_ + static_cast<int>(std::floor((static_cast<double>(x) * total) / width));
+      const int binEndSample = viewStart_ + static_cast<int>(std::ceil((static_cast<double>(x + 1) * total) / width));
+      const int s0 = std::clamp(binStartSample, from, to - 1);
+      const int s1 = std::clamp(std::max(s0 + 1, binEndSample), s0 + 1, to);
+      for (int i = s0; i < s1; ++i) {
+        const double v = ydata[i];
+        vmin = std::min(vmin, v);
+        vmax = std::max(vmax, v);
+        any = true;
       }
-      const double v = ydata[i];
-      vmin = std::min(vmin, v);
-      vmax = std::max(vmax, v);
-      any = true;
+    } else {
+      const double binStart = xmin + (xspan * x) / width;
+      const double binEnd = xmin + (xspan * (x + 1)) / width;
+      for (int i = from; i < to; ++i) {
+        if (xdata[i] < binStart || xdata[i] > binEnd) {
+          continue;
+        }
+        const double v = ydata[i];
+        vmin = std::min(vmin, v);
+        vmax = std::max(vmax, v);
+        any = true;
+      }
     }
     if (!any) {
       continue;
@@ -719,12 +875,9 @@ void SignalGraphWindow::zoomIn() {
   const int center = viewStart_ + currentLen / 2;
   const int minLen = 32;
   const int newLen = std::max(minLen, currentLen / 2);
-  viewLen_ = std::clamp(newLen, 1, totalLen);
-  viewStart_ = center - viewLen_ / 2;
-  viewStart_ = std::clamp(viewStart_, 0, std::max(0, totalLen - viewLen_));
-  updateYRange();
-  invalidateStaticLayer();
-  update();
+  const int nextLen = std::clamp(newLen, 1, totalLen);
+  const int nextStart = std::clamp(center - nextLen / 2, 0, std::max(0, totalLen - nextLen));
+  applyRange({nextStart, nextStart + nextLen});
 }
 
 void SignalGraphWindow::zoomOut() {
@@ -732,11 +885,9 @@ void SignalGraphWindow::zoomOut() {
     return;
   }
   const int totalLen = totalTimelineSamples(data_);
-  viewLen_ = std::min(totalLen, static_cast<int>(viewLen_ * 1.8));
-  viewStart_ = std::clamp(viewStart_, 0, std::max(0, totalLen - viewLen_));
-  updateYRange();
-  invalidateStaticLayer();
-  update();
+  const int nextLen = std::min(totalLen, static_cast<int>(viewLen_ * 1.8));
+  const int nextStart = std::clamp(viewStart_, 0, std::max(0, totalLen - nextLen));
+  applyRange({nextStart, nextStart + nextLen});
 }
 
 void SignalGraphWindow::panView(int direction) {
@@ -751,13 +902,8 @@ void SignalGraphWindow::panView(int direction) {
   }
 
   const int step = std::max(1, static_cast<int>(std::llround(currentLen * 0.25)));
-  viewStart_ += (direction > 0 ? step : -step);
-  viewStart_ = std::clamp(viewStart_, 0, std::max(0, totalLen - currentLen));
-  viewLen_ = currentLen;
-
-  updateYRange();
-  invalidateStaticLayer();
-  update();
+  const int nextStart = std::clamp(viewStart_ + (direction > 0 ? step : -step), 0, std::max(0, totalLen - currentLen));
+  applyRange({nextStart, nextStart + currentLen});
 }
 
 void SignalGraphWindow::togglePlayPause() {
@@ -793,6 +939,10 @@ void SignalGraphWindow::stopPlayback() {
 }
 
 void SignalGraphWindow::startPlaybackForRange(const Range& range) {
+  startPlaybackFromSample(range, range.start, false);
+}
+
+void SignalGraphWindow::startPlaybackFromSample(const Range& range, int startSample, bool startPaused) {
   if (!data_.isAudio || data_.channels.empty() || data_.sampleRate <= 0) {
     return;
   }
@@ -806,7 +956,7 @@ void SignalGraphWindow::startPlaybackForRange(const Range& range) {
     return;
   }
 
-  const int startTimeline = std::clamp(range.start, 0, totalTimeline - 1);
+  const int startTimeline = std::clamp(startSample, 0, totalTimeline - 1);
   const int endTimeline = std::clamp(range.end, startTimeline + 1, totalTimeline);
   if (endTimeline <= startTimeline) {
     return;
@@ -855,6 +1005,9 @@ void SignalGraphWindow::startPlaybackForRange(const Range& range) {
 
   playheadTimer_.start();
   audioSink_->start(audioBuffer_);
+  if (startPaused && audioSink_) {
+    audioSink_->suspend();
+  }
 }
 
 SignalGraphWindow::Range SignalGraphWindow::activePlaybackRange() const {
@@ -870,6 +1023,45 @@ SignalGraphWindow::Range SignalGraphWindow::normalizedSelection() const {
     return {};
   }
   return {std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
+}
+
+int SignalGraphWindow::currentPlaybackSample() const {
+  if (!audioSink_) {
+    return -1;
+  }
+  const int span = std::max(1, playingRange_.end - playingRange_.start);
+  const qint64 processedUs = audioSink_->processedUSecs();
+  double frac = (processedUs * 1e-6) * data_.sampleRate / static_cast<double>(span);
+  frac = std::clamp(frac, 0.0, 1.0);
+  int sample = playingRange_.start + static_cast<int>(span * frac);
+  sample = std::clamp(sample, playingRange_.start, std::max(playingRange_.start, playingRange_.end - 1));
+  return sample;
+}
+
+void SignalGraphWindow::handlePlaybackAfterRangeChange() {
+  if (!audioSink_) {
+    return;
+  }
+  const int sample = currentPlaybackSample();
+  if (sample < 0) {
+    return;
+  }
+  const int viewEnd = viewStart_ + std::max(1, viewLen_) - 1;
+  if (sample < viewStart_ || sample > viewEnd) {
+    stopPlayback();
+    return;
+  }
+
+  const bool wasPaused = audioSink_->state() == QAudio::SuspendedState;
+  const Range newRange = activePlaybackRange();
+  if (sample < newRange.start || sample >= newRange.end) {
+    stopPlayback();
+    return;
+  }
+
+  if (sample != playingRange_.start || newRange.end != playingRange_.end) {
+    startPlaybackFromSample(newRange, sample, wasPaused);
+  }
 }
 
 int SignalGraphWindow::xToSample(const QPoint& pt) const {
@@ -940,6 +1132,44 @@ void SignalGraphWindow::updateYRange() {
   }
 }
 
+void SignalGraphWindow::syncVisibleXRangeToAxes() {
+  if (graphics_.axes().empty() || viewLen_ <= 0) {
+    return;
+  }
+
+  for (const auto& axesConst : graphics_.axes()) {
+    auto* axes = graphics_.axesByIdMutable(axesConst.common.id);
+    if (!axes) {
+      continue;
+    }
+    const auto lines = graphics_.linesForAxes(axes->common.id);
+    if (lines.empty()) {
+      continue;
+    }
+    const auto* line = lines.front();
+    if (!line) {
+      continue;
+    }
+
+    if (data_.isAudio && data_.sampleRate > 0) {
+      const double x0 = data_.startTimeSec + static_cast<double>(viewStart_) / static_cast<double>(data_.sampleRate);
+      const double x1 = data_.startTimeSec +
+                        static_cast<double>(viewStart_ + std::max(1, viewLen_) - 1) /
+                            static_cast<double>(data_.sampleRate);
+      axes->xlim = {x0, x1};
+      continue;
+    }
+
+    if (line->xdata.isEmpty()) {
+      continue;
+    }
+    const int totalLen = line->xdata.size();
+    const int from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
+    const int to = std::clamp(viewStart_ + std::max(1, viewLen_) - 1, from, totalLen - 1);
+    axes->xlim = {line->xdata[from], line->xdata[to]};
+  }
+}
+
 void SignalGraphWindow::invalidateStaticLayer() {
   staticLayerValid_ = false;
 }
@@ -979,101 +1209,85 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
     p.setPen(Qt::white);
     p.drawText(plot, Qt::AlignCenter, "No signal data");
   } else {
-    const GraphicsAxesHandle* frameAxes = nullptr;
-    const GraphicsLineHandle* frameLine = nullptr;
-    for (const auto& axes : graphics_.axes()) {
-      if (axes.common.visible) {
-        frameAxes = &axes;
-        break;
-      }
-    }
-    const QRect frameRect = frameAxes ? axesRectForPlot(*frameAxes, plot) : plot;
-    if (frameAxes) {
-      const auto visibleLines = graphics_.linesForAxes(frameAxes->common.id);
-      if (!visibleLines.empty()) {
-        frameLine = visibleLines.front();
-      }
-    }
-
-    const int xTickCount = 7;
-    const int yTickCount = 5;
-    const bool xIsTime = data_.isAudio && data_.sampleRate > 0;
-    const double xStartVal = frameAxes ? frameAxes->xlim[0] : 0.0;
-    const double xEndVal = frameAxes ? frameAxes->xlim[1] : 1.0;
-    const double xSpan = std::max(1e-12, xEndVal - xStartVal);
-    const double yStartVal = frameAxes ? frameAxes->ylim[0] : yMin_;
-    const double yEndVal = frameAxes ? frameAxes->ylim[1] : yMax_;
-    const double ySpan = std::max(1e-12, yEndVal - yStartVal);
-    const int yDigits = ySpan < 0.1 ? 4 : (ySpan < 1.0 ? 3 : 2);
-    std::vector<double> xTicks;
-    xTicks.reserve(10);
-    if (xIsTime) {
-      const bool longRange = xEndVal >= 60.0 || xSpan >= 60.0;
-      const double rawStep = xSpan / 6.0;
-      double step = niceNumber(rawStep, true);
-      if (longRange) {
-        step = std::max(1.0, std::round(step));
-      }
-      const double eps = step * 1e-6;
-      double t = std::ceil((xStartVal - eps) / step) * step;
-      while (t <= xEndVal + eps) {
-        if (t >= xStartVal - eps) {
-          xTicks.push_back(t);
-        }
-        t += step;
-      }
-      if (xTicks.empty()) {
-        xTicks.push_back(xEndVal);
-      } else {
-        const double diff = std::fabs(xTicks.back() - xEndVal);
-        const bool farInValue = diff > std::max(1e-6, step * 0.1);
-        const double pxDist = (diff / std::max(1e-12, xSpan)) * plot.width();
-        constexpr double kMinEndpointLabelSpacingPx = 56.0;
-        if (farInValue && pxDist >= kMinEndpointLabelSpacingPx) {
-          xTicks.push_back(xEndVal);
-        }
-      }
-    } else {
-      for (int i = 0; i < xTickCount; ++i) {
-        const double v = xStartVal + (xSpan * i) / (xTickCount - 1);
-        xTicks.push_back(v);
-      }
-    }
-
-    if (xTicks.size() > 8) {
-      std::vector<double> thinned;
-      thinned.reserve(8);
-      const size_t stride = static_cast<size_t>(std::ceil(xTicks.size() / 8.0));
-      for (size_t i = 0; i < xTicks.size(); i += std::max<size_t>(1, stride)) {
-        thinned.push_back(xTicks[i]);
-      }
-      if (!xTicks.empty() && (thinned.empty() || std::fabs(thinned.back() - xTicks.back()) > 1e-9)) {
-        thinned.push_back(xTicks.back());
-      }
-      xTicks.swap(thinned);
-    }
-
-    if (frameAxes && frameAxes->xgrid) {
-      p.setPen(QColor(112, 120, 112));
-      for (double tick : xTicks) {
-        const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
-        const int x = frameRect.left() + static_cast<int>(std::llround(frac * frameRect.width()));
-        p.drawLine(x, frameRect.top(), x, frameRect.bottom());
-      }
-    }
-    if (frameAxes && frameAxes->ygrid) {
-      p.setPen(QColor(112, 120, 112));
-      for (int i = 0; i < yTickCount; ++i) {
-        const int y = frameRect.bottom() - (i * frameRect.height()) / (yTickCount - 1);
-        p.drawLine(frameRect.left(), y, frameRect.right(), y);
-      }
-    }
-
     for (const auto& axes : graphics_.axes()) {
       if (!axes.common.visible) {
         continue;
       }
       const QRect axesRect = axesRectForPlot(axes, plot);
+      const int xTickCount = 7;
+      const int yTickCount = 5;
+      const bool xIsTime = data_.isAudio && data_.sampleRate > 0;
+      const double xStartVal = axes.xlim[0];
+      const double xEndVal = axes.xlim[1];
+      const double xSpan = std::max(1e-12, xEndVal - xStartVal);
+      const double yStartVal = axes.ylim[0];
+      const double yEndVal = axes.ylim[1];
+      const double ySpan = std::max(1e-12, yEndVal - yStartVal);
+      const int yDigits = ySpan < 0.1 ? 4 : (ySpan < 1.0 ? 3 : 2);
+      std::vector<double> xTicks;
+      xTicks.reserve(10);
+      if (xIsTime) {
+        const bool longRange = xEndVal >= 60.0 || xSpan >= 60.0;
+        const double rawStep = xSpan / 6.0;
+        double step = niceNumber(rawStep, true);
+        if (longRange) {
+          step = std::max(1.0, std::round(step));
+        }
+        const double eps = step * 1e-6;
+        double t = std::ceil((xStartVal - eps) / step) * step;
+        while (t <= xEndVal + eps) {
+          if (t >= xStartVal - eps) {
+            xTicks.push_back(t);
+          }
+          t += step;
+        }
+        if (xTicks.empty()) {
+          xTicks.push_back(xEndVal);
+        } else {
+          const double diff = std::fabs(xTicks.back() - xEndVal);
+          const bool farInValue = diff > std::max(1e-6, step * 0.1);
+          const double pxDist = (diff / std::max(1e-12, xSpan)) * axesRect.width();
+          constexpr double kMinEndpointLabelSpacingPx = 56.0;
+          if (farInValue && pxDist >= kMinEndpointLabelSpacingPx) {
+            xTicks.push_back(xEndVal);
+          }
+        }
+      } else {
+        for (int i = 0; i < xTickCount; ++i) {
+          const double v = xStartVal + (xSpan * i) / (xTickCount - 1);
+          xTicks.push_back(v);
+        }
+      }
+
+      if (xTicks.size() > 8) {
+        std::vector<double> thinned;
+        thinned.reserve(8);
+        const size_t stride = static_cast<size_t>(std::ceil(xTicks.size() / 8.0));
+        for (size_t i = 0; i < xTicks.size(); i += std::max<size_t>(1, stride)) {
+          thinned.push_back(xTicks[i]);
+        }
+        if (!xTicks.empty() && (thinned.empty() || std::fabs(thinned.back() - xTicks.back()) > 1e-9)) {
+          thinned.push_back(xTicks.back());
+        }
+        xTicks.swap(thinned);
+      }
+
+      if (axes.xgrid) {
+        p.setPen(QColor(112, 120, 112));
+        for (double tick : xTicks) {
+          const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+          const int x = axesRect.left() + static_cast<int>(std::llround(frac * axesRect.width()));
+          p.drawLine(x, axesRect.top(), x, axesRect.bottom());
+        }
+      }
+      if (axes.ygrid) {
+        p.setPen(QColor(112, 120, 112));
+        for (int i = 0; i < yTickCount; ++i) {
+          const int y = axesRect.bottom() - (i * axesRect.height()) / (yTickCount - 1);
+          p.drawLine(axesRect.left(), y, axesRect.right(), y);
+        }
+      }
+
       p.fillRect(axesRect, axes.common.color);
       if (axes.box) {
         p.setPen(QPen(QColor(40, 40, 40), std::max(1, axes.lineWidth)));
@@ -1081,6 +1295,27 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       }
       for (const auto* line : graphics_.linesForAxes(axes.common.id)) {
         drawLine(p, axesRect, axes, *line);
+      }
+      p.setPen(QColor(36, 36, 36));
+      for (double tick : xTicks) {
+        const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+        const int x = axesRect.left() + static_cast<int>(std::llround(frac * axesRect.width()));
+        p.drawLine(x, axesRect.bottom(), x, axesRect.bottom() + 4);
+        QString label;
+        if (xIsTime) {
+          label = formatSecondsCompact(tick);
+        } else {
+          label = QString::number(static_cast<int>(std::llround(tick)));
+        }
+        p.drawText(QRect(x - 42, axesRect.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
+      }
+
+      for (int i = 0; i < yTickCount; ++i) {
+        const int y = axesRect.bottom() - (i * axesRect.height()) / (yTickCount - 1);
+        const double v = yStartVal + ((yEndVal - yStartVal) * i) / (yTickCount - 1);
+        p.drawLine(axesRect.left() - 4, y, axesRect.left(), y);
+        const QString label = QString::number(v, 'f', yDigits);
+        p.drawText(QRect(2, y - 8, axesRect.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, label);
       }
     }
 
@@ -1102,28 +1337,6 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       const int px = parentRect.left() + static_cast<int>(std::llround(text.common.pos[0] * parentRect.width()));
       const int py = parentRect.bottom() - static_cast<int>(std::llround(text.common.pos[1] * parentRect.height()));
       p.drawText(QPoint(px, py), text.stringValue);
-    }
-
-    p.setPen(QColor(36, 36, 36));
-    for (double tick : xTicks) {
-      const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
-      const int x = frameRect.left() + static_cast<int>(std::llround(frac * frameRect.width()));
-      p.drawLine(x, frameRect.bottom(), x, frameRect.bottom() + 4);
-      QString label;
-      if (xIsTime) {
-        label = formatSecondsCompact(tick);
-      } else {
-        label = QString::number(static_cast<int>(std::llround(tick)));
-      }
-      p.drawText(QRect(x - 42, frameRect.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
-    }
-
-    for (int i = 0; i < yTickCount; ++i) {
-      const int y = frameRect.bottom() - (i * frameRect.height()) / (yTickCount - 1);
-      const double v = yStartVal + ((yEndVal - yStartVal) * i) / (yTickCount - 1);
-      p.drawLine(frameRect.left() - 4, y, frameRect.left(), y);
-      const QString label = QString::number(v, 'f', yDigits);
-      p.drawText(QRect(2, y - 8, frameRect.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, label);
     }
   }
 

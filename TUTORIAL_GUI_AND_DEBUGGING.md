@@ -77,6 +77,17 @@ Open from variable list with `Enter`.
 - `Left` / `Right`: pan view
 - Mouse drag: select a range
 - `Enter`: zoom to selected range
+- Range anchors and history:
+  - macOS: `Cmd+Left`: snap the visible range start to `0`
+  - Windows/Linux: `Alt+Left`: snap the visible range start to `0`
+  - macOS: `Cmd+Right`: snap the visible range end to the end of the signal
+  - Windows/Linux: `Alt+Right`: snap the visible range end to the end of the signal
+  - macOS: `Cmd+/`: immediately unzoom to the full signal
+  - Windows/Linux: `Alt+/`: immediately unzoom to the full signal
+  - macOS: `Cmd+,`: go back to the previous zoom/range
+  - Windows/Linux: `Alt+,`: go back to the previous zoom/range
+  - macOS: `Cmd+.`: go forward to the newer range after going back
+  - Windows/Linux: `Alt+.`: go forward to the newer range after going back
 
 ### Stereo display modes
 

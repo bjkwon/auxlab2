@@ -18,7 +18,7 @@ StructMembersWindow::StructMembersWindow(const QString& structPath, const std::v
   auto* layout = new QVBoxLayout(this);
   tree_ = new QTreeWidget(this);
   tree_->setColumnCount(4);
-  tree_->setHeaderLabels({"Name", "Type/dbRMS", "Size", "Content"});
+  tree_->setHeaderLabels({"Name", "Type/dBRMS", "Size", "Content"});
   tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
   tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
