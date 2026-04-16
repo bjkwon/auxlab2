@@ -1363,6 +1363,10 @@ void MainWindow::connectSignals() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+  closeAllScopedWindows();
+  if (debugWindow_) {
+    debugWindow_->close();
+  }
   saveHistory();
   saveRecentUdfFiles();
   savePersistedWindowLayout();
@@ -4365,6 +4369,23 @@ void MainWindow::closeAllScopedWindowsInCurrentScope() {
   toClose.reserve(scopedWindows_.size());
   for (const auto& entry : scopedWindows_) {
     if (entry.window && entry.scope == currentScope) {
+      toClose.push_back(entry.window.data());
+    }
+  }
+  for (QWidget* w : toClose) {
+    if (w) {
+      w->close();
+    }
+  }
+  reconcileScopedWindows();
+}
+
+void MainWindow::closeAllScopedWindows() {
+  reconcileScopedWindows();
+  std::vector<QWidget*> toClose;
+  toClose.reserve(scopedWindows_.size());
+  for (const auto& entry : scopedWindows_) {
+    if (entry.window) {
       toClose.push_back(entry.window.data());
     }
   }

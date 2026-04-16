@@ -128,6 +128,7 @@ private:
   void focusScopedWindowByIndex(int oneBasedIndex);
   void toggleLastTwoScopedWindows();
   void closeAllScopedWindowsInCurrentScope();
+  void closeAllScopedWindows();
   void noteScopedWindowFocus(QWidget* window);
   SignalGraphWindow* graphWindowForHandle(std::uint64_t handleId) const;
   std::optional<std::uint64_t> graphicsHandleIdForVariable(const QString& varName) const;
