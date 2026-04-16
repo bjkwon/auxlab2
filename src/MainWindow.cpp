@@ -3857,7 +3857,7 @@ bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
 }
 
 void MainWindow::refreshPlaybackHandles() {
-  bool anyUpdated = false;
+  bool anyFinished = false;
   for (auto it = playbackSessions_.begin(); it != playbackSessions_.end();) {
     PlaybackSession& session = it->second;
     if (!session.sink) {
@@ -3865,6 +3865,7 @@ void MainWindow::refreshPlaybackHandles() {
         ++it;
         continue;
       }
+      anyFinished = true;
       it = playbackSessions_.erase(it);
       continue;
     }
@@ -3889,7 +3890,6 @@ void MainWindow::refreshPlaybackHandles() {
     engine_.updateRuntimeHandleMembers(session.handleId,
                                        {{"repeat_left", static_cast<double>(repeatLeft)},
                                         {"prog", std::clamp(prog, 0.0, 100.0)}});
-    anyUpdated = true;
 
     if (session.sink->state() == QAudio::IdleState || session.sink->state() == QAudio::StoppedState) {
       QAudioSink* finishedSink = session.sink;
@@ -3897,6 +3897,7 @@ void MainWindow::refreshPlaybackHandles() {
       engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
       session.sink = nullptr;
       session.buffer = nullptr;
+      anyFinished = true;
       it = playbackSessions_.erase(it);
       if (finishedSink) {
         finishedSink->stop();
@@ -3910,7 +3911,7 @@ void MainWindow::refreshPlaybackHandles() {
     }
     ++it;
   }
-  if (anyUpdated) {
+  if (anyFinished) {
     refreshVariables();
   }
 }
