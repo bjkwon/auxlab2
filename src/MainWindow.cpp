@@ -1909,7 +1909,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   }
 
   static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes\s*\(\s*\)$)");
-  static const QRegularExpression kMethodDeleteNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.delete\s*\(\s*\)$)");
+  static const QRegularExpression kMethodDeleteNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.delete(?:\s*\(\s*\))?$)");
   static const QRegularExpression kMethodPlotNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot$)");
   static const QRegularExpression kMethodPlot(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot\s*\((.*)\)$)");
   static const QRegularExpression kMethodLine(R"(^([A-Za-z_][A-Za-z0-9_]*)\.line\s*\((.*)\)$)");
@@ -1959,8 +1959,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       (kFigureCallForAuxe.match(normalized).hasMatch() && !kFigureNoArgForBridge.match(normalized).hasMatch()) ||
       simplePlotForAuxe ||
       kLineCallForAuxe.match(normalized).hasMatch() ||
-      kAxesCallForAuxe.match(normalized).hasMatch() ||
-      kDeleteCallForAuxe.match(normalized).hasMatch()) {
+      kAxesCallForAuxe.match(normalized).hasMatch()) {
     return false;
   }
 
