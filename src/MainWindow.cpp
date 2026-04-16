@@ -102,95 +102,6 @@ QString graphicsHandleText(std::uint64_t id) {
   return id == 0 ? QStringLiteral("[]") : QString::number(id);
 }
 
-std::optional<SignalData> signalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
-  if (!obj) {
-    return std::nullopt;
-  }
-
-  const int channels = aux_num_channels(obj);
-  if (channels <= 0) {
-    return std::nullopt;
-  }
-
-  SignalData data;
-  data.isAudio = aux_is_audio(obj);
-  data.sampleRate = 0;
-  double minStartMs = std::numeric_limits<double>::infinity();
-  struct SegmentCopy {
-    int startSample = 0;
-    std::vector<double> samples;
-  };
-  std::vector<std::vector<SegmentCopy>> byChannel(static_cast<size_t>(channels));
-
-  for (int ch = 0; ch < channels; ++ch) {
-    const int segCount = aux_num_segments(obj, ch);
-    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
-      AuxSignal seg{};
-      if (!aux_get_segment(obj, ch, segIndex, seg)) {
-        continue;
-      }
-      minStartMs = std::min(minStartMs, seg.tmark);
-      if (seg.fs > 0) {
-        data.sampleRate = seg.fs;
-      }
-      SegmentCopy copy;
-      copy.samples.resize(seg.nSamples);
-      if (seg.buf && seg.nSamples > 0) {
-        std::copy(seg.buf, seg.buf + seg.nSamples, copy.samples.begin());
-      }
-      byChannel[static_cast<size_t>(ch)].push_back(std::move(copy));
-    }
-  }
-
-  if (!std::isfinite(minStartMs)) {
-    return std::nullopt;
-  }
-  if (data.sampleRate <= 0) {
-    data.sampleRate = defaultSampleRate > 0 ? defaultSampleRate : 1;
-  }
-
-  int globalTotalSamples = 0;
-  for (int ch = 0; ch < channels; ++ch) {
-    const int segCount = aux_num_segments(obj, ch);
-    for (int segIndex = 0; segIndex < segCount; ++segIndex) {
-      AuxSignal seg{};
-      if (!aux_get_segment(obj, ch, segIndex, seg)) {
-        continue;
-      }
-      const int startSample = std::max(0, static_cast<int>(std::llround((seg.tmark - minStartMs) * data.sampleRate / 1000.0)));
-      byChannel[static_cast<size_t>(ch)][static_cast<size_t>(segIndex)].startSample = startSample;
-      globalTotalSamples = std::max(globalTotalSamples, startSample + static_cast<int>(seg.nSamples));
-    }
-  }
-
-  if (globalTotalSamples <= 0) {
-    return std::nullopt;
-  }
-
-  data.channels.reserve(static_cast<size_t>(channels));
-  for (int ch = 0; ch < channels; ++ch) {
-    ChannelData channel;
-    channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
-    for (const auto& seg : byChannel[static_cast<size_t>(ch)]) {
-      if (seg.samples.empty()) {
-        continue;
-      }
-      const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
-      if (start >= channel.samples.size()) {
-        continue;
-      }
-      const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
-      std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
-    }
-    data.channels.push_back(std::move(channel));
-  }
-
-  if (data.isAudio && std::isfinite(minStartMs)) {
-    data.startTimeSec = minStartMs / 1000.0;
-  }
-  return data;
-}
-
 std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
   if (!obj) {
     return std::nullopt;
@@ -868,7 +779,7 @@ std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
                                              const std::string& sourceExpr,
                                              const std::string& styleText,
                                              std::string& err) {
-  auto sig = signalDataFromAuxObj(obj, engine_.runtimeSettings().sampleRate);
+  auto sig = buildSignalDataFromAuxObj(obj, engine_.runtimeSettings().sampleRate);
   if (!sig) {
     err = "Error: plot argument is not plottable.";
     return 0;
@@ -3607,7 +3518,7 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     return false;
   }
 
-  const auto sig = signalDataFromAuxObj(obj, 22050);
+  const auto sig = buildSignalDataFromAuxObj(obj, 22050);
   if (!sig || !sig->isAudio || sig->channels.empty()) {
     err = "play() requires an audio object.";
     return false;

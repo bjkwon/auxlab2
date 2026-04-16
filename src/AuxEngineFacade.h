@@ -48,6 +48,8 @@ struct RuntimeSettingsSnapshot {
   std::vector<std::string> udfPaths;
 };
 
+std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate);
+
 class AuxEngineFacade {
 public:
   AuxEngineFacade();
