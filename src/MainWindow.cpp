@@ -2093,8 +2093,12 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
 
     auto getScalarHandleValue = [this](const QString& expr) -> std::optional<double> {
-      if (const auto scalar = engine_.getScalarValue(expr.toStdString()); scalar.has_value()) {
-        return scalar;
+      const auto directType = engine_.getValueType(expr.toStdString());
+      if (directType.has_value()) {
+        if ((*directType & kDisplayTypebitHandle) == 0) {
+          return std::nullopt;
+        }
+        return engine_.getScalarValue(expr.toStdString());
       }
 
       const QString tmpVar = nextGraphicsTempName();
@@ -2104,6 +2108,11 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
         return std::nullopt;
       }
 
+      const auto tmpType = engine_.getValueType(tmpVar.toStdString());
+      if (!tmpType.has_value() || (*tmpType & kDisplayTypebitHandle) == 0) {
+        engine_.deleteVar(tmpVar.toStdString());
+        return std::nullopt;
+      }
       const auto scalar = engine_.getScalarValue(tmpVar.toStdString());
       engine_.deleteVar(tmpVar.toStdString());
       return scalar;
@@ -3603,6 +3612,20 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     err = "play() requires an audio object.";
     return false;
   }
+
+  if (varAudioSink_) {
+    varAudioSink_->disconnect(this);
+    varAudioSink_->reset();
+    varAudioSink_->stop();
+    delete varAudioSink_;
+    varAudioSink_ = nullptr;
+  }
+  if (varAudioBuffer_) {
+    varAudioBuffer_->close();
+    delete varAudioBuffer_;
+    varAudioBuffer_ = nullptr;
+  }
+  varPcmData_.clear();
 
   const int sampleRate = sig->sampleRate > 0 ? sig->sampleRate : 22050;
   const double onePassDurationMs = sig->startTimeSec * 1000.0 +

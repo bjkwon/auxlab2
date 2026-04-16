@@ -845,6 +845,20 @@ std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std:
   return out;
 }
 
+std::optional<uint16_t> AuxEngineFacade::getValueType(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return std::nullopt;
+  }
+
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return std::nullopt;
+  }
+  return aux_type(obj);
+}
+
 bool AuxEngineFacade::isStringVar(const std::string& varName) const {
   auxContext* ctx = activeCtx_;
   if (!ctx) {

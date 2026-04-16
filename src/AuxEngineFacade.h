@@ -69,6 +69,7 @@ public:
   std::optional<double> getScalarValue(const std::string& varName) const;
   std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;
   std::optional<BinaryData> getBinaryData(const std::string& varName) const;
+  std::optional<uint16_t> getValueType(const std::string& varName) const;
   bool isBinaryVar(const std::string& varName) const;
   bool isStringVar(const std::string& varName) const;
   bool isStructVar(const std::string& varName) const;
