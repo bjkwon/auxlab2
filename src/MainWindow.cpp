@@ -3676,21 +3676,25 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     return true;
   }
 
-  if (it != playbackSessions_.end()) {
-    QAudioSink* oldSink = it->second.sink;
-    QBuffer* oldBuffer = it->second.buffer;
-    it->second.sink = nullptr;
-    it->second.buffer = nullptr;
-    playbackSessions_.erase(it);
-    if (oldSink) {
-      oldSink->stop();
-      oldSink->deleteLater();
+  for (auto& entry : playbackSessions_) {
+    PlaybackSession& existing = entry.second;
+    engine_.updateRuntimeHandleMembers(existing.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+    if (existing.buffer) {
+      existing.buffer->close();
     }
-    if (oldBuffer) {
-      oldBuffer->close();
-      oldBuffer->deleteLater();
+    if (existing.sink) {
+      existing.sink->disconnect(this);
+      existing.sink->reset();
+      existing.sink->stop();
+      existing.sink->deleteLater();
+      existing.sink = nullptr;
+    }
+    if (existing.buffer) {
+      existing.buffer->deleteLater();
+      existing.buffer = nullptr;
     }
   }
+  playbackSessions_.clear();
 
   PlaybackSession session;
   session.handleId = handleId;
