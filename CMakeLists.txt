@@ -113,6 +113,19 @@ set(AUXLAB2_SOURCES
   src/UdfDebugWindow.cpp
 )
 
+if(WIN32)
+  set(AUXLAB2_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.ico")
+  set(AUXLAB2_WINDOWS_RC "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/auxlab2.rc")
+  if(EXISTS "${AUXLAB2_ICON_ICO}" AND EXISTS "${AUXLAB2_WINDOWS_RC}")
+    list(APPEND AUXLAB2_SOURCES "${AUXLAB2_WINDOWS_RC}")
+  else()
+    message(WARNING
+      "Windows app icon resources are missing. Expected resources/icons/auxlab-icon.ico "
+      "and resources/windows/auxlab2.rc."
+    )
+  endif()
+endif()
+
 if(WIN32 AND AUXLAB2_WIN32_GUI)
     add_executable(auxlab2 WIN32 ${AUXLAB2_SOURCES})
 else()
