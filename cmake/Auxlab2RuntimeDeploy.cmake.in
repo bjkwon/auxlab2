@@ -1,0 +1,212 @@
+set(_prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+set(_search_dirs "@AUXLAB2_DEPLOY_SEARCH_DIRS@")
+set(_qt_deployment_enabled "@AUXLAB2_ENABLE_QT_DEPLOYMENT@")
+set(_macdeployqt "@AUXLAB2_MACDEPLOYQT_EXECUTABLE@")
+set(_codesign "@AUXLAB2_CODESIGN_EXECUTABLE@")
+set(_windeployqt "@AUXLAB2_WINDEPLOYQT_EXECUTABLE@")
+set(_macos_platform_plugin "@AUXLAB2_MACOS_QT_PLATFORM_PLUGIN@")
+set(_macos_multimedia_plugin "@AUXLAB2_MACOS_QT_MULTIMEDIA_PLUGIN@")
+
+list(APPEND _search_dirs
+  "${_prefix}/@CMAKE_INSTALL_BINDIR@"
+  "${_prefix}/@CMAKE_INSTALL_LIBDIR@"
+)
+list(REMOVE_DUPLICATES _search_dirs)
+
+if(WIN32)
+  set(_app "${_prefix}/@CMAKE_INSTALL_BINDIR@/auxlab2.exe")
+  set(_libs "")
+  if(EXISTS "${_prefix}/@CMAKE_INSTALL_BINDIR@/auxe.dll")
+    list(APPEND _libs "${_prefix}/@CMAKE_INSTALL_BINDIR@/auxe.dll")
+  endif()
+  if(EXISTS "${_prefix}/@CMAKE_INSTALL_LIBDIR@/auxe.dll")
+    list(APPEND _libs "${_prefix}/@CMAKE_INSTALL_LIBDIR@/auxe.dll")
+  endif()
+
+  if(EXISTS "${_app}")
+    if(_qt_deployment_enabled AND NOT _windeployqt STREQUAL "")
+      message(STATUS "Running windeployqt for auxlab2...")
+      execute_process(
+        COMMAND "${_windeployqt}"
+                --dir "${_prefix}/@CMAKE_INSTALL_BINDIR@"
+                --release
+                --compiler-runtime
+                --no-translations
+                --no-opengl-sw
+                "${_app}"
+        RESULT_VARIABLE _windeployqt_result
+      )
+      if(NOT _windeployqt_result EQUAL 0)
+        message(FATAL_ERROR "windeployqt failed with exit code ${_windeployqt_result}")
+      endif()
+    endif()
+
+    message(STATUS "Collecting auxlab2 Windows runtime dependencies...")
+    file(GET_RUNTIME_DEPENDENCIES
+      EXECUTABLES "${_app}"
+      LIBRARIES ${_libs}
+      RESOLVED_DEPENDENCIES_VAR _resolved
+      UNRESOLVED_DEPENDENCIES_VAR _unresolved
+      DIRECTORIES ${_search_dirs}
+      PRE_EXCLUDE_REGEXES
+        "api-ms-win-.*"
+        "ext-ms-.*"
+      POST_EXCLUDE_REGEXES
+        "^[A-Za-z]:/Windows/.*"
+        "^[A-Za-z]:/WINDOWS/.*"
+        ".*/System32/.*"
+        ".*/system32/.*"
+    )
+
+    if(_unresolved)
+      message(STATUS "auxlab2 unresolved runtime deps (ignored for now): ${_unresolved}")
+    endif()
+
+    foreach(_dep IN LISTS _resolved)
+      file(INSTALL
+        DESTINATION "${_prefix}/@CMAKE_INSTALL_BINDIR@"
+        TYPE SHARED_LIBRARY
+        FILES "${_dep}"
+      )
+    endforeach()
+
+    foreach(_qt_subdir IN ITEMS platforms multimedia styles imageformats iconengines tls networkinformation)
+      if(EXISTS "${_prefix}/@CMAKE_INSTALL_BINDIR@/${_qt_subdir}")
+        file(GLOB_RECURSE _qt_plugin_files
+          LIST_DIRECTORIES false
+          "${_prefix}/@CMAKE_INSTALL_BINDIR@/${_qt_subdir}/*.dll"
+        )
+        foreach(_plugin IN LISTS _qt_plugin_files)
+          file(INSTALL
+            DESTINATION "${_prefix}/@CMAKE_INSTALL_BINDIR@/${_qt_subdir}"
+            TYPE SHARED_LIBRARY
+            FILES "${_plugin}"
+          )
+        endforeach()
+      endif()
+    endforeach()
+  endif()
+elseif(APPLE)
+  set(_bundle "${_prefix}/auxlab2.app")
+  if(EXISTS "${_bundle}")
+    set(_extra_libs "")
+    set(_plugin_root "${_bundle}/Contents/PlugIns")
+    set(_framework_root "${_bundle}/Contents/Frameworks")
+    if(EXISTS "${_prefix}/@CMAKE_INSTALL_LIBDIR@/libauxe.dylib")
+      file(MAKE_DIRECTORY "${_framework_root}")
+      file(INSTALL
+        DESTINATION "${_framework_root}"
+        TYPE SHARED_LIBRARY
+        FILES "${_prefix}/@CMAKE_INSTALL_LIBDIR@/libauxe.dylib"
+      )
+      list(APPEND _extra_libs "${_framework_root}/libauxe.dylib")
+    endif()
+
+    if(_qt_deployment_enabled)
+      if(NOT _macos_platform_plugin STREQUAL "")
+        file(MAKE_DIRECTORY "${_plugin_root}/platforms")
+        file(INSTALL
+          DESTINATION "${_plugin_root}/platforms"
+          TYPE SHARED_LIBRARY
+          FILES "${_macos_platform_plugin}"
+        )
+        list(APPEND _extra_libs "${_plugin_root}/platforms/libqcocoa.dylib")
+      endif()
+
+      if(NOT _macos_multimedia_plugin STREQUAL "")
+        file(MAKE_DIRECTORY "${_plugin_root}/multimedia")
+        file(INSTALL
+          DESTINATION "${_plugin_root}/multimedia"
+          TYPE SHARED_LIBRARY
+          FILES "${_macos_multimedia_plugin}"
+        )
+        list(APPEND _extra_libs "${_plugin_root}/multimedia/libdarwinmediaplugin.dylib")
+      endif()
+
+      file(WRITE "${_bundle}/Contents/Resources/qt.conf" "[Paths]\nPlugins = PlugIns\n")
+
+      if(_macdeployqt STREQUAL "")
+        message(FATAL_ERROR "macdeployqt is required for macOS deployment but was not found")
+      endif()
+
+      set(_macdeployqt_cmd
+        "${_macdeployqt}"
+        "${_bundle}"
+        -no-plugins
+        -always-overwrite
+      )
+      foreach(_extra IN LISTS _extra_libs)
+        if(_extra MATCHES "\\.(dylib)$")
+          list(APPEND _macdeployqt_cmd "-executable=${_extra}")
+        endif()
+      endforeach()
+
+      message(STATUS "Running narrowed macdeployqt deployment for auxlab2...")
+      execute_process(
+        COMMAND ${_macdeployqt_cmd}
+        RESULT_VARIABLE _macdeployqt_result
+      )
+      if(NOT _macdeployqt_result EQUAL 0)
+        message(FATAL_ERROR "macdeployqt failed with exit code ${_macdeployqt_result}")
+      endif()
+
+      if(NOT _codesign STREQUAL "")
+        set(_bundle_main "${_bundle}/Contents/MacOS/auxlab2")
+        if(IS_SYMLINK "${_bundle_main}")
+          get_filename_component(_bundle_main_target "${_bundle_main}" REALPATH)
+          file(REMOVE "${_bundle_main}")
+          file(COPY_FILE "${_bundle_main_target}" "${_bundle_main}")
+          execute_process(
+            COMMAND /bin/chmod 755 "${_bundle_main}"
+            RESULT_VARIABLE _chmod_result
+          )
+          if(NOT _chmod_result EQUAL 0)
+            message(FATAL_ERROR "chmod failed with exit code ${_chmod_result}")
+          endif()
+        endif()
+
+        message(STATUS "Applying ad-hoc code signature to auxlab2 bundle...")
+        execute_process(
+          COMMAND "${_codesign}" --force --deep --sign - "${_bundle}"
+          RESULT_VARIABLE _codesign_result
+        )
+        if(NOT _codesign_result EQUAL 0)
+          message(FATAL_ERROR "codesign failed with exit code ${_codesign_result}")
+        endif()
+      endif()
+    endif()
+  endif()
+else()
+  set(_app "${_prefix}/@CMAKE_INSTALL_BINDIR@/auxlab2")
+  set(_libs "")
+  if(EXISTS "${_prefix}/@CMAKE_INSTALL_LIBDIR@/libauxe.so")
+    list(APPEND _libs "${_prefix}/@CMAKE_INSTALL_LIBDIR@/libauxe.so")
+  endif()
+  if(EXISTS "${_app}")
+    message(STATUS "Collecting auxlab2 Linux runtime dependencies...")
+    file(GET_RUNTIME_DEPENDENCIES
+      EXECUTABLES "${_app}"
+      LIBRARIES ${_libs}
+      RESOLVED_DEPENDENCIES_VAR _resolved
+      UNRESOLVED_DEPENDENCIES_VAR _unresolved
+      DIRECTORIES ${_search_dirs}
+      POST_EXCLUDE_REGEXES
+        "^/lib.*"
+        "^/usr/lib.*"
+        "^/usr/local/lib.*"
+    )
+
+    if(_unresolved)
+      message(STATUS "auxlab2 unresolved runtime deps (ignored for now): ${_unresolved}")
+    endif()
+
+    foreach(_dep IN LISTS _resolved)
+      get_filename_component(_dep_name "${_dep}" NAME)
+      file(INSTALL
+        DESTINATION "${_prefix}/@CMAKE_INSTALL_LIBDIR@"
+        TYPE SHARED_LIBRARY
+        FILES "${_dep}"
+      )
+    endforeach()
+  endif()
+endif()

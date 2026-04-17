@@ -12,6 +12,7 @@ set(CMAKE_AUTOUIC ON)
 option(AUXLAB2_ENABLE_QT_DEPLOYMENT "Deploy Qt runtime pieces during install/package steps" ON)
 option(AUXLAB2_ENABLE_CPACK "Enable CPack package generation" ON)
 option(AUXLAB2_ENABLE_NATIVE_LINUX_PACKAGES "Enable DEB/RPM generators in addition to TGZ on Linux" OFF)
+option(AUXLAB2_ENABLE_WINDOWS_NSIS "Enable NSIS installer generation on Windows" OFF)
 
 file(READ "${CMAKE_CURRENT_LIST_DIR}/VERSION" AUXLAB2_VERSION_RAW)
 string(STRIP "${AUXLAB2_VERSION_RAW}" AUXLAB2_VERSION)
@@ -260,6 +261,14 @@ install(FILES
   DESTINATION "${CMAKE_INSTALL_DATADIR}/auxlab2"
 )
 
+if(WIN32)
+  install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.ico"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/auxlab2"
+    OPTIONAL
+  )
+endif()
+
 if(UNIX AND NOT APPLE)
   install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.png"
@@ -337,6 +346,17 @@ if(AUXLAB2_ENABLE_CPACK)
 
   if(WIN32)
     set(CPACK_GENERATOR "ZIP")
+    if(AUXLAB2_ENABLE_WINDOWS_NSIS)
+      list(APPEND CPACK_GENERATOR "NSIS")
+    endif()
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "auxlab2")
+    set(CPACK_NSIS_DISPLAY_NAME "auxlab2")
+    set(CPACK_NSIS_PACKAGE_NAME "auxlab2")
+    set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.ico")
+    set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab-icon.ico")
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    set(CPACK_NSIS_MODIFY_PATH OFF)
+    set(CPACK_PACKAGE_EXECUTABLES "auxlab2;auxlab2")
   elseif(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
   else()
