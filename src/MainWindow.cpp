@@ -11,13 +11,17 @@
 #include "UdfDebugWindow.h"
 
 #include <QAbstractItemView>
+#include <QAudioDevice>
 #include <QAudioFormat>
+#include <QAudioSource>
 #include <QAction>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileSystemWatcher>
@@ -28,10 +32,15 @@
 #include <QKeyEvent>
 #include <QListWidget>
 #include <QLabel>
+#include <QMediaDevices>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QIODevice>
 #include <QPlainTextEdit>
+#include <QPermissions>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
@@ -57,6 +66,66 @@ constexpr int kHistoryCommandRole = Qt::UserRole + 1;
 constexpr int kHistoryCountRole = Qt::UserRole + 2;
 constexpr int kHistoryIsCommentRole = Qt::UserRole + 3;
 constexpr uint16_t kDisplayTypebitHandle = 0x4000;
+}
+
+class AudioCaptureSink final : public QIODevice {
+public:
+  explicit AudioCaptureSink(QObject* parent = nullptr) : QIODevice(parent) {}
+
+  bool open(OpenMode mode) override {
+    data_.clear();
+    return QIODevice::open(mode | QIODevice::WriteOnly);
+  }
+
+  QByteArray snapshot() const {
+    QMutexLocker locker(&mutex_);
+    return data_;
+  }
+
+protected:
+  qint64 readData(char*, qint64) override { return -1; }
+
+  qint64 writeData(const char* data, qint64 len) override {
+    if (!data || len <= 0) {
+      return 0;
+    }
+    QMutexLocker locker(&mutex_);
+    data_.append(data, static_cast<qsizetype>(len));
+    return len;
+  }
+
+private:
+  mutable QMutex mutex_;
+  QByteArray data_;
+};
+
+namespace {
+
+double decodeAudioSample(QAudioFormat::SampleFormat sampleFormat, const char* ptr) {
+  switch (sampleFormat) {
+    case QAudioFormat::UInt8: {
+      const auto sample = static_cast<unsigned char>(*ptr);
+      return (static_cast<double>(sample) - 128.0) / 128.0;
+    }
+    case QAudioFormat::Int16: {
+      qint16 sample = 0;
+      std::memcpy(&sample, ptr, sizeof(sample));
+      return std::clamp(static_cast<double>(sample) / 32768.0, -1.0, 1.0);
+    }
+    case QAudioFormat::Int32: {
+      qint32 sample = 0;
+      std::memcpy(&sample, ptr, sizeof(sample));
+      return std::clamp(static_cast<double>(sample) / 2147483648.0, -1.0, 1.0);
+    }
+    case QAudioFormat::Float: {
+      float sample = 0.0f;
+      std::memcpy(&sample, ptr, sizeof(sample));
+      return std::clamp(static_cast<double>(sample), -1.0, 1.0);
+    }
+    default:
+      return 0.0;
+  }
+}
 
 QString historyFilePath() {
   QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -199,6 +268,40 @@ QStringList splitTopLevelArgs(const QString& text) {
       else if (ch == ']') --bracket;
       else if (ch == ',' && paren == 0 && bracket == 0) {
         out.push_back(current.trimmed());
+        current.clear();
+        continue;
+      }
+    }
+    current += ch;
+  }
+  if (!current.trimmed().isEmpty()) {
+    out.push_back(current.trimmed());
+  }
+  return out;
+}
+
+QStringList splitTopLevelStatements(const QString& text) {
+  QStringList out;
+  QString current;
+  int paren = 0;
+  int bracket = 0;
+  bool inString = false;
+  for (int i = 0; i < text.size(); ++i) {
+    const QChar ch = text[i];
+    if (ch == '"' && (i == 0 || text[i - 1] != '\\')) {
+      inString = !inString;
+      current += ch;
+      continue;
+    }
+    if (!inString) {
+      if (ch == '(') ++paren;
+      else if (ch == ')') --paren;
+      else if (ch == '[') ++bracket;
+      else if (ch == ']') --bracket;
+      else if ((ch == ',' || ch == ';') && paren == 0 && bracket == 0) {
+        if (!current.trimmed().isEmpty()) {
+          out.push_back(current.trimmed());
+        }
         current.clear();
         continue;
       }
@@ -600,6 +703,15 @@ int auxlab2DeleteHandle(void* userdata, std::uint64_t handleId, std::string& err
   return window->deleteGraphicsHandle(handleId, errstr) ? 1 : 0;
 }
 
+int auxlab2RepaintHandle(void* userdata, std::uint64_t handleId, std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 graphics backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->repaintGraphicsHandle(handleId, errstr) ? 1 : 0;
+}
+
 int auxlab2StartPlayback(void* userdata,
                          std::uint64_t handleId,
                          AuxObj obj,
@@ -625,6 +737,45 @@ int auxlab2ControlPlayback(void* userdata,
   }
   return window->controlPlaybackHandle(handleId, command, errstr) ? 1 : 0;
 }
+
+int auxlab2RecordAudio(void* userdata,
+                       int deviceId,
+                       int sampleRate,
+                       int channelCount,
+                       double durationMs,
+                       auxRecordResult& result,
+                       std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 recording backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->recordAudio(deviceId, sampleRate, channelCount, durationMs, result, errstr) ? 1 : 0;
+}
+
+int auxlab2StartAsyncRecord(void* userdata,
+                            std::uint64_t handleId,
+                            const auxAsyncRecordSpec& spec,
+                            std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 async recording backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->startAsyncRecordHandle(handleId, spec, errstr) ? 1 : 0;
+}
+
+int auxlab2ControlAsyncRecord(void* userdata,
+                              std::uint64_t handleId,
+                              auxRecordCommand command,
+                              std::string& errstr) {
+  auto* window = static_cast<MainWindow*>(userdata);
+  if (!window) {
+    errstr = "auxlab2 async recording backend has no MainWindow owner.";
+    return 0;
+  }
+  return window->controlAsyncRecordHandle(handleId, command, errstr) ? 1 : 0;
+}
 }  // namespace
 
 MainWindow::MainWindow() {
@@ -646,6 +797,7 @@ MainWindow::MainWindow() {
     backend.axes_from_handle = &auxlab2AxesFromHandle;
     backend.axes_at_pos = &auxlab2AxesAtPos;
     backend.delete_handle = &auxlab2DeleteHandle;
+    backend.repaint_handle = &auxlab2RepaintHandle;
     std::string err;
     if (!engine_.installGraphicsBackend(backend, err)) {
       QMessageBox::warning(this, "AUX Graphics", QString::fromStdString(err));
@@ -655,6 +807,9 @@ MainWindow::MainWindow() {
     playbackBackend.userdata = this;
     playbackBackend.start = &auxlab2StartPlayback;
     playbackBackend.control = &auxlab2ControlPlayback;
+    playbackBackend.record = &auxlab2RecordAudio;
+    playbackBackend.record_async_start = &auxlab2StartAsyncRecord;
+    playbackBackend.record_async_control = &auxlab2ControlAsyncRecord;
     if (!engine_.installPlaybackBackend(playbackBackend, err)) {
       QMessageBox::warning(this, "AUX Playback", QString::fromStdString(err));
     }
@@ -1035,6 +1190,26 @@ bool MainWindow::deleteGraphicsHandle(std::uint64_t handleId, std::string& err) 
   return false;
 }
 
+bool MainWindow::repaintGraphicsHandle(std::uint64_t handleId, std::string& err) {
+  if (handleId == 0) {
+    err = "Error: repaint() requires a graphics handle.";
+    return false;
+  }
+
+  SignalGraphWindow* owner = graphWindowForHandle(handleId);
+  if (!owner) {
+    err = "Error: graphics handle not found: " + std::to_string(handleId);
+    return false;
+  }
+
+  if (!owner->isVisible()) {
+    owner->show();
+  }
+  owner->refreshGraphics();
+  owner->repaint();
+  return true;
+}
+
 void MainWindow::buildUi() {
   setWindowTitle(QString("%1 v%2").arg(AUXLAB2_APP_NAME).arg(AUXLAB2_VERSION));
   resize(1200, 760);
@@ -1242,7 +1417,9 @@ void MainWindow::buildMenus() {
 }
 
 void MainWindow::connectSignals() {
-  connect(commandBox_, &CommandConsole::commandSubmitted, this, &MainWindow::runCommand);
+  connect(commandBox_, &CommandConsole::commandSubmitted, this, [this](const QString& cmd) {
+    runCommand(cmd);
+  });
   connect(commandBox_, &CommandConsole::historyNavigateRequested, this, &MainWindow::navigateHistoryFromCommand);
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
   connect(audioVariableBox_, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
@@ -1811,9 +1988,11 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
                            1500);
 }
 
-void MainWindow::runCommand(const QString& cmd) {
+void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
   QString actual = cmd;
+  lastStartedAsyncRecordHandle_ = 0;
+  lastStartedAsyncRecordCallback_.clear();
   static const QRegularExpression kMethodPlayNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\b(?!\s*\())");
   static const QRegularExpression kMethodPlayArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\s*\((.*)\))");
   static const QRegularExpression kMethodStopNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.stop(?:\s*\(\s*\))?\b)");
@@ -1826,9 +2005,20 @@ void MainWindow::runCommand(const QString& cmd) {
     actual.replace(kMethodPauseNoArg, QStringLiteral("pause(\\1)"));
     actual.replace(kMethodResumeNoArg, QStringLiteral("resume(\\1)"));
   }
-  if (!actual.trimmed().isEmpty()) {
+  if (addToHistory && !actual.trimmed().isEmpty()) {
     addHistory(actual);
   }
+
+  const QStringList topLevelParts = splitTopLevelStatements(actual);
+  if (topLevelParts.size() > 1) {
+    for (const QString& part : topLevelParts) {
+      if (!part.trimmed().isEmpty()) {
+        runCommand(part, false);
+      }
+    }
+    return;
+  }
+
   QString graphicsOutput;
   if (!actual.trimmed().isEmpty() && tryHandleGraphicsCommand(actual, graphicsOutput)) {
     updateCommandPrompt();
@@ -1863,6 +2053,49 @@ void MainWindow::runCommand(const QString& cmd) {
 
   if (!actual.trimmed().isEmpty()) {
     auto result = engine_.eval(actual.toStdString());
+    static const QRegularExpression kAsyncRecordAssign(
+        R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*record\s*\(.*\)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$)");
+    static const QRegularExpression kAsyncRecordExpr(
+        R"(^\s*record\s*\(.*\)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$)");
+    const QRegularExpressionMatch asyncRecordMatch = kAsyncRecordAssign.match(actual.trimmed());
+    const QRegularExpressionMatch asyncRecordExprMatch = kAsyncRecordExpr.match(actual.trimmed());
+    if (result.status != static_cast<int>(auxEvalStatus::AUX_EVAL_OK) &&
+        lastStartedAsyncRecordHandle_ != 0 &&
+        asyncRecordMatch.hasMatch() &&
+        asyncRecordMatch.captured(2) == lastStartedAsyncRecordCallback_ &&
+        recordingSessions_.find(lastStartedAsyncRecordHandle_) != recordingSessions_.end()) {
+      engine_.setHandleValues(asyncRecordMatch.captured(1).toStdString(), {lastStartedAsyncRecordHandle_});
+      const auto strayCallbackVar = engine_.getScalarValue(lastStartedAsyncRecordCallback_.toStdString());
+      if (strayCallbackVar.has_value()) {
+        const auto rounded = static_cast<long long>(std::llround(*strayCallbackVar));
+        if (rounded > 0 &&
+            std::fabs(*strayCallbackVar - static_cast<double>(rounded)) < 1e-9 &&
+            static_cast<std::uint64_t>(rounded) == lastStartedAsyncRecordHandle_ &&
+            asyncRecordMatch.captured(1) != lastStartedAsyncRecordCallback_) {
+          engine_.deleteVar(lastStartedAsyncRecordCallback_.toStdString());
+        }
+      }
+      result.status = static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
+      result.output = QString("audio_record handle %1").arg(lastStartedAsyncRecordHandle_).toStdString();
+    } else if (result.status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK) &&
+               lastStartedAsyncRecordHandle_ != 0 &&
+               ((asyncRecordMatch.hasMatch() && asyncRecordMatch.captured(2) == lastStartedAsyncRecordCallback_) ||
+                (asyncRecordExprMatch.hasMatch() && asyncRecordExprMatch.captured(1) == lastStartedAsyncRecordCallback_))) {
+      if (asyncRecordMatch.hasMatch()) {
+        engine_.setHandleValues(asyncRecordMatch.captured(1).toStdString(), {lastStartedAsyncRecordHandle_});
+        const auto strayCallbackVar = engine_.getScalarValue(lastStartedAsyncRecordCallback_.toStdString());
+        if (strayCallbackVar.has_value()) {
+          const auto rounded = static_cast<long long>(std::llround(*strayCallbackVar));
+          if (rounded > 0 &&
+              std::fabs(*strayCallbackVar - static_cast<double>(rounded)) < 1e-9 &&
+              static_cast<std::uint64_t>(rounded) == lastStartedAsyncRecordHandle_ &&
+              asyncRecordMatch.captured(1) != lastStartedAsyncRecordCallback_) {
+            engine_.deleteVar(lastStartedAsyncRecordCallback_.toStdString());
+          }
+        }
+      }
+      result.output = QString("audio_record handle %1").arg(lastStartedAsyncRecordHandle_).toStdString();
+    }
     updateCommandPrompt();
     const QString trimmed = actual.trimmed();
     const bool suppressEcho = trimmed.endsWith(';');
@@ -1890,6 +2123,17 @@ void MainWindow::runCommand(const QString& cmd) {
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();
+}
+
+void MainWindow::appendConsoleMessage(const QString& text) {
+  if (!commandBox_) {
+    return;
+  }
+  const QString trimmed = text.trimmed();
+  if (trimmed.isEmpty()) {
+    return;
+  }
+  commandBox_->appendAsyncOutput(trimmed);
 }
 
 bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
@@ -2063,6 +2307,15 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     return it != vars.end() && it->typeTag == "HNDL";
   };
 
+  auto isGraphicsHandleId = [this](std::uint64_t handleId) -> bool {
+    if (handleId == 0) {
+      return false;
+    }
+    return graphicsManager_.findFigureById(handleId) != nullptr ||
+           graphicsManager_.findAxesOwner(handleId) != nullptr ||
+           graphWindowForHandle(handleId) != nullptr;
+  };
+
   auto evaluateVectorExpr = [this](const QString& expr) -> std::optional<QVector<double>> {
     const QString tmpVar = nextGraphicsTempName();
     const EvalResult evalResult = engine_.eval(QString("%1=%2").arg(tmpVar, expr).toStdString());
@@ -2161,8 +2414,11 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       } else if (key == "xlim" || key == "ylim") {
         QVector<double> vals;
         if (!parseDoubleVectorExpr(rhs, vals) || vals.size() != 2) return QString("Error: invalid axes property value for %1").arg(prop);
-        if (key == "xlim") axes->xlim = {vals[0], vals[1]};
-        else axes->ylim = {vals[0], vals[1]};
+        if (key == "xlim") {
+          owner->setAxesXLim(handleId, {vals[0], vals[1]});
+        } else {
+          owner->setAxesYLim(handleId, {vals[0], vals[1]});
+        }
       } else if (key == "fontname" || key == "xscale" || key == "yscale") {
         if (!isQuotedStringLiteral(rhs)) return QString("Error: invalid axes property value for %1").arg(prop);
         const QString value = unquoteStringLiteral(rhs);
@@ -2242,6 +2498,9 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (!resolveHandleId(rootExpr, handleId)) {
       return false;
     }
+    if (!isGraphicsHandleId(handleId)) {
+      return false;
+    }
     const QString currentValue = graphicsHandleProperty(handleId, prop);
     if (currentValue.startsWith(QStringLiteral("Error:"))) {
       output = currentValue;
@@ -2263,6 +2522,9 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     if (!resolveHandleId(rootExpr, handleId)) {
       return false;
     }
+    if (!isGraphicsHandleId(handleId)) {
+      return false;
+    }
     const QString result = handleSetter(handleId, setMatch.captured(2), setMatch.captured(3).trimmed());
     output = result;
     return true;
@@ -2273,6 +2535,9 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     std::uint64_t handleId = 0;
     const QString rootExpr = getMatch.captured(1).trimmed();
     if (!resolveHandleId(rootExpr, handleId)) {
+      return false;
+    }
+    if (!isGraphicsHandleId(handleId)) {
       return false;
     }
     const QString prop = getMatch.captured(2);
@@ -2712,12 +2977,234 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
 void MainWindow::onAsyncPollTick() {
   refreshPlaybackHandles();
+  processRecordingSessions();
   const int changed = engine_.pollAsync();
   if (changed <= 0) {
     return;
   }
   refreshVariables();
   reconcileScopedWindows();
+}
+
+void MainWindow::syncRecordCallbackGraphicsOutputs(std::uint64_t recordHandleId) {
+  if (recordHandleId == 0) {
+    return;
+  }
+
+  const auto vars = engine_.listVariables();
+  for (const auto& var : vars) {
+    if (var.typeTag != "HNDL") {
+      continue;
+    }
+    const auto handleValue = engine_.getScalarValue(var.name);
+    if (!handleValue.has_value()) {
+      continue;
+    }
+    const auto roundedHandle = static_cast<long long>(std::llround(*handleValue));
+    if (roundedHandle <= 0 || std::fabs(*handleValue - static_cast<double>(roundedHandle)) > 1e-9 ||
+        static_cast<std::uint64_t>(roundedHandle) != recordHandleId) {
+      continue;
+    }
+
+    const QString rootPath = QString::fromStdString(var.name);
+    const auto members = engine_.listStructMembers(var.name);
+    for (const auto& member : members) {
+      if (member.typeTag != "HNDL") {
+        continue;
+      }
+      const QString memberPath = QString("%1.%2").arg(rootPath, QString::fromStdString(member.name));
+      const auto graphicsValue = engine_.getScalarValue(memberPath.toStdString());
+      if (!graphicsValue.has_value()) {
+        continue;
+      }
+      const auto roundedGraphics = static_cast<long long>(std::llround(*graphicsValue));
+      if (roundedGraphics <= 0 || std::fabs(*graphicsValue - static_cast<double>(roundedGraphics)) > 1e-9) {
+        continue;
+      }
+      const std::uint64_t graphicsHandleId = static_cast<std::uint64_t>(roundedGraphics);
+      auto* owner = graphWindowForHandle(graphicsHandleId);
+      if (!owner) {
+        continue;
+      }
+
+      const auto xlim = engine_.getNumericVector(QString("%1.xlim").arg(memberPath).toStdString());
+      if (xlim.has_value() && xlim->size() == 2) {
+        owner->setAxesXLim(graphicsHandleId, {(*xlim)[0], (*xlim)[1]});
+      }
+      const auto ylim = engine_.getNumericVector(QString("%1.ylim").arg(memberPath).toStdString());
+      if (ylim.has_value() && ylim->size() == 2) {
+        owner->setAxesYLim(graphicsHandleId, {(*ylim)[0], (*ylim)[1]});
+      }
+    }
+  }
+}
+
+void MainWindow::processRecordingSessions() {
+  bool anyUpdated = false;
+  std::vector<std::uint64_t> failedSessions;
+  QStringList callbackMessages;
+  const bool previousSuppressWindowActivation = suppressWindowActivation_;
+  suppressWindowActivation_ = true;
+
+  for (auto& entry : recordingSessions_) {
+    RecordingSession& session = entry.second;
+    if (!session.callbackOpenDelivered && !session.callbackName.isEmpty()) {
+      auxRecordCallbackPayload payload;
+      payload.sample_rate = session.sampleRate;
+      payload.num_channels = session.channelCount;
+      payload.callback_index = 0;
+      std::string output;
+      if (!engine_.invokeRecordCallback(session.handleId, session.callbackName.toStdString(), payload, output)) {
+        QString msg = QString("Error in recording callback %1: %2")
+                          .arg(session.callbackName, QString::fromStdString(output).trimmed());
+        callbackMessages.push_back(msg);
+        failedSessions.push_back(session.handleId);
+        continue;
+      }
+      engine_.attachRecordCallbackOutputsToHandle(session.handleId, session.handleId);
+      syncRecordCallbackGraphicsOutputs(session.handleId);
+      session.callbackOpenDelivered = true;
+      session.callbackIndex = 0;
+      if (!output.empty()) {
+        callbackMessages.push_back(QString::fromStdString(output).trimmed());
+      }
+      anyUpdated = true;
+    }
+
+    if (!session.sink || session.captureBytesPerSample <= 0 || session.captureChannels <= 0 || session.sampleRate <= 0) {
+      continue;
+    }
+
+    const QByteArray rawData = session.sink->snapshot();
+    const qsizetype bytesPerFrame = static_cast<qsizetype>(session.captureBytesPerSample) * static_cast<qsizetype>(session.captureChannels);
+    if (bytesPerFrame <= 0) {
+      continue;
+    }
+
+    const qsizetype completeBytes = rawData.size() - (rawData.size() % bytesPerFrame);
+    if (completeBytes <= session.rawBytesConsumed) {
+      continue;
+    }
+
+    const char* base = rawData.constData() + session.rawBytesConsumed;
+    const qsizetype newFrames = (completeBytes - session.rawBytesConsumed) / bytesPerFrame;
+    session.capturedInterleaved.reserve(session.capturedInterleaved.size() +
+                                        static_cast<size_t>(newFrames) * static_cast<size_t>(session.captureChannels));
+
+    for (qsizetype frame = 0; frame < newFrames; ++frame) {
+      const char* framePtr = base + frame * bytesPerFrame;
+      for (int ch = 0; ch < session.captureChannels; ++ch) {
+        const char* samplePtr = framePtr + ch * session.captureBytesPerSample;
+        session.capturedInterleaved.push_back(
+            decodeAudioSample(static_cast<QAudioFormat::SampleFormat>(session.captureSampleFormat), samplePtr));
+      }
+    }
+    session.rawBytesConsumed = completeBytes;
+
+    const qsizetype captureFrames =
+        static_cast<qsizetype>(session.capturedInterleaved.size() / static_cast<size_t>(session.captureChannels));
+    if (captureFrames <= 1) {
+      continue;
+    }
+
+    auto sourceSampleAt = [&](qsizetype frameIndex, int requestedChannel) -> double {
+      frameIndex = std::clamp<qsizetype>(frameIndex, 0, captureFrames - 1);
+      if (session.captureChannels == 1) {
+        return session.capturedInterleaved[static_cast<size_t>(frameIndex)];
+      }
+      if (session.channelCount == 1) {
+        const size_t baseIndex = static_cast<size_t>(frameIndex) * static_cast<size_t>(session.captureChannels);
+        double sum = 0.0;
+        for (int ch = 0; ch < session.captureChannels; ++ch) {
+          sum += session.capturedInterleaved[baseIndex + static_cast<size_t>(ch)];
+        }
+        return sum / static_cast<double>(session.captureChannels);
+      }
+      const int srcCh = std::min(requestedChannel, session.captureChannels - 1);
+      return session.capturedInterleaved[static_cast<size_t>(frameIndex) * static_cast<size_t>(session.captureChannels) +
+                                         static_cast<size_t>(srcCh)];
+    };
+
+    const double ratio = static_cast<double>(session.captureSampleRate) / static_cast<double>(session.sampleRate);
+    while (true) {
+      const double srcPos = static_cast<double>(session.outputFramesProduced) * ratio;
+      const qsizetype srcIndex0 = static_cast<qsizetype>(std::floor(srcPos));
+      const qsizetype srcIndex1 = srcIndex0 + 1;
+      if (srcIndex1 >= captureFrames) {
+        break;
+      }
+      const double frac = srcPos - static_cast<double>(srcIndex0);
+      for (int outCh = 0; outCh < session.channelCount; ++outCh) {
+        const double s0 = sourceSampleAt(srcIndex0, outCh);
+        const double s1 = sourceSampleAt(srcIndex1, outCh);
+        session.pendingConvertedInterleaved.push_back(std::clamp(s0 + (s1 - s0) * frac, -1.0, 1.0));
+      }
+      ++session.outputFramesProduced;
+    }
+
+    const qsizetype blockFrames =
+        std::max<qsizetype>(1, static_cast<qsizetype>(std::llround(session.blockMs * static_cast<double>(session.sampleRate) / 1000.0)));
+    const qsizetype blockSamples = blockFrames * static_cast<qsizetype>(session.channelCount);
+    while (static_cast<qsizetype>(session.pendingConvertedInterleaved.size()) >= blockSamples) {
+      auto endIt = session.pendingConvertedInterleaved.begin() + blockSamples;
+      session.readyBlocks.emplace_back(session.pendingConvertedInterleaved.begin(), endIt);
+      session.pendingConvertedInterleaved.erase(session.pendingConvertedInterleaved.begin(), endIt);
+    }
+
+    const double durRecMs = 1000.0 * static_cast<double>(session.outputFramesProduced) / static_cast<double>(session.sampleRate);
+    std::map<std::string, double> members;
+    members["durRec"] = durRecMs;
+    if (session.durationMs > 0.0) {
+      members["durLeft"] = std::max(0.0, session.durationMs - durRecMs);
+      members["prog"] = std::clamp(100.0 * durRecMs / session.durationMs, 0.0, 100.0);
+    } else {
+      members["durLeft"] = 0.0;
+      members["prog"] = 0.0;
+    }
+    engine_.updateRuntimeHandleMembers(session.handleId, members);
+    anyUpdated = true;
+
+    while (!session.readyBlocks.empty() && failedSessions.end() == std::find(failedSessions.begin(), failedSessions.end(), session.handleId)) {
+      auxRecordCallbackPayload payload;
+      payload.sample_rate = session.sampleRate;
+      payload.num_channels = session.channelCount;
+      payload.callback_index = session.callbackIndex + 1;
+      payload.interleaved = std::move(session.readyBlocks.front());
+      session.readyBlocks.erase(session.readyBlocks.begin());
+
+      std::string output;
+      if (!engine_.invokeRecordCallback(session.handleId, session.callbackName.toStdString(), payload, output)) {
+        QString msg = QString("Error in recording callback %1: %2")
+                          .arg(session.callbackName, QString::fromStdString(output).trimmed());
+        callbackMessages.push_back(msg);
+        failedSessions.push_back(session.handleId);
+        break;
+      }
+      engine_.attachRecordCallbackOutputsToHandle(session.handleId, session.handleId);
+      syncRecordCallbackGraphicsOutputs(session.handleId);
+      session.callbackIndex = payload.callback_index;
+      if (!output.empty()) {
+        callbackMessages.push_back(QString::fromStdString(output).trimmed());
+      }
+      anyUpdated = true;
+    }
+  }
+
+  for (std::uint64_t handleId : failedSessions) {
+    std::string ignored;
+    controlAsyncRecordHandle(handleId, auxRecordCommand::AUX_RECORD_STOP, ignored);
+  }
+
+  for (const QString& msg : callbackMessages) {
+    if (!msg.trimmed().isEmpty()) {
+      appendConsoleMessage(msg.trimmed());
+    }
+  }
+
+  if (anyUpdated) {
+    refreshVariables();
+  }
+  suppressWindowActivation_ = previousSuppressWindowActivation;
 }
 
 void MainWindow::updateCommandPrompt() {
@@ -3774,6 +4261,507 @@ bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
   return true;
 }
 
+bool MainWindow::recordAudio(int deviceId,
+                             int sampleRate,
+                             int channelCount,
+                             double durationMs,
+                             auxRecordResult& result,
+                             std::string& err) {
+  result = auxRecordResult{};
+  if (sampleRate <= 0) {
+    err = "record() requires a positive sample rate.";
+    return false;
+  }
+  if (channelCount != 1 && channelCount != 2) {
+    err = "record() supports only mono or stereo capture.";
+    return false;
+  }
+  if (!(durationMs > 0.0)) {
+    err = "record() requires a positive duration.";
+    return false;
+  }
+
+  const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
+  if (inputs.isEmpty()) {
+    err = "No audio input devices are available.";
+    return false;
+  }
+
+  QAudioDevice selected = QMediaDevices::defaultAudioInput();
+  if (deviceId > 0) {
+    if (deviceId >= inputs.size()) {
+      err = "Requested audio input device is out of range.";
+      return false;
+    }
+    selected = inputs[deviceId];
+  } else if (selected.isNull()) {
+    selected = inputs.front();
+  }
+  if (selected.isNull()) {
+    err = "Failed to select an audio input device.";
+    return false;
+  }
+
+  QAudioFormat fmt = selected.preferredFormat();
+  if (fmt.sampleRate() <= 0 || fmt.channelCount() <= 0 || fmt.sampleFormat() == QAudioFormat::Unknown) {
+    err = "The selected audio input device does not expose a usable recording format.";
+    return false;
+  }
+
+  const int bytesPerSample = fmt.bytesPerSample();
+  const int captureChannels = fmt.channelCount();
+  if (bytesPerSample <= 0 || captureChannels <= 0) {
+    err = "The selected audio input format is invalid.";
+    return false;
+  }
+  if (channelCount == 2 && captureChannels < 2) {
+    err = QString("Requested stereo capture, but selected input device '%1' provides only %2 channel(s).")
+              .arg(selected.description())
+              .arg(captureChannels)
+              .toStdString();
+    return false;
+  }
+
+  QMicrophonePermission microphonePermission;
+  Qt::PermissionStatus permissionStatus = qApp->checkPermission(microphonePermission);
+  if (permissionStatus == Qt::PermissionStatus::Undetermined) {
+    QEventLoop permissionLoop;
+    qApp->requestPermission(microphonePermission, this, [&](const QPermission& permission) {
+      permissionStatus = qApp->checkPermission(permission);
+      permissionLoop.quit();
+    });
+    permissionLoop.exec();
+  }
+  if (permissionStatus != Qt::PermissionStatus::Granted) {
+    err = "Microphone permission was denied for auxlab2.";
+    return false;
+  }
+
+  QAudioSource source(selected, fmt);
+  AudioCaptureSink sink;
+  sink.open(QIODevice::WriteOnly);
+  std::string runtimeErr;
+  QEventLoop loop;
+  QTimer stopTimer;
+  stopTimer.setSingleShot(true);
+  QObject::connect(&stopTimer, &QTimer::timeout, &loop, [&]() {
+    source.stop();
+    loop.quit();
+  });
+  QObject::connect(&source, &QAudioSource::stateChanged, &loop, [&](QAudio::State state) {
+    if (state == QAudio::StoppedState && source.error() != QAudio::NoError) {
+      switch (source.error()) {
+        case QAudio::OpenError:
+          runtimeErr = "Failed to open the audio input device.";
+          break;
+        case QAudio::IOError:
+          runtimeErr = "Audio input I/O error.";
+          break;
+        case QAudio::UnderrunError:
+          runtimeErr = "Audio input underrun.";
+          break;
+        case QAudio::FatalError:
+          runtimeErr = "Fatal audio input error.";
+          break;
+        default:
+          runtimeErr = "Audio capture stopped unexpectedly.";
+          break;
+      }
+      loop.quit();
+    }
+  });
+  source.start(&sink);
+  if (source.state() == QAudio::StoppedState && source.error() != QAudio::NoError) {
+    err = "Failed to start audio capture.";
+    return false;
+  }
+
+  stopTimer.start(std::max(1, static_cast<int>(std::llround(durationMs))));
+  loop.exec();
+  source.stop();
+  if (!runtimeErr.empty()) {
+    err = runtimeErr;
+    return false;
+  }
+
+  const QByteArray rawData = sink.snapshot();
+
+  const int bytesPerFrame = bytesPerSample * captureChannels;
+  if (bytesPerFrame <= 0 || rawData.size() < bytesPerFrame) {
+    err = QString("No audio data was captured. device=%1 fs=%2 ch=%3 fmt=%4 state=%5 bytes=%6")
+              .arg(selected.description())
+              .arg(fmt.sampleRate())
+              .arg(fmt.channelCount())
+              .arg(static_cast<int>(fmt.sampleFormat()))
+              .arg(static_cast<int>(source.state()))
+              .arg(rawData.size())
+              .toStdString();
+    return false;
+  }
+
+  const qsizetype totalFramesAvailable = rawData.size() / bytesPerFrame;
+  const qsizetype captureFrames = std::max<qsizetype>(
+      1,
+      std::min(totalFramesAvailable,
+               static_cast<qsizetype>(std::llround(durationMs * static_cast<double>(fmt.sampleRate()) / 1000.0))));
+  const qsizetype targetFrames = std::max<qsizetype>(
+      1,
+      static_cast<qsizetype>(std::llround(durationMs * static_cast<double>(sampleRate) / 1000.0)));
+  result.sample_rate = sampleRate;
+  result.num_channels = channelCount;
+  result.interleaved.reserve(static_cast<size_t>(targetFrames) * static_cast<size_t>(channelCount));
+
+  std::vector<double> capturedInterleaved;
+  capturedInterleaved.reserve(static_cast<size_t>(captureFrames) * static_cast<size_t>(captureChannels));
+
+  const char* base = rawData.constData();
+  for (qsizetype frame = 0; frame < captureFrames; ++frame) {
+    const char* framePtr = base + frame * bytesPerFrame;
+    for (int ch = 0; ch < captureChannels; ++ch) {
+      const char* samplePtr = framePtr + ch * bytesPerSample;
+      capturedInterleaved.push_back(decodeAudioSample(fmt.sampleFormat(), samplePtr));
+    }
+  }
+
+  auto sourceSampleAt = [&](qsizetype frameIndex, int requestedChannel) -> double {
+    frameIndex = std::clamp<qsizetype>(frameIndex, 0, captureFrames - 1);
+    if (captureChannels == 1) {
+      return capturedInterleaved[static_cast<size_t>(frameIndex)];
+    }
+    if (channelCount == 1) {
+      const size_t baseIndex = static_cast<size_t>(frameIndex) * static_cast<size_t>(captureChannels);
+      double sum = 0.0;
+      for (int ch = 0; ch < captureChannels; ++ch) {
+        sum += capturedInterleaved[baseIndex + static_cast<size_t>(ch)];
+      }
+      return sum / static_cast<double>(captureChannels);
+    }
+    const int srcCh = std::min(requestedChannel, captureChannels - 1);
+    return capturedInterleaved[static_cast<size_t>(frameIndex) * static_cast<size_t>(captureChannels) +
+                               static_cast<size_t>(srcCh)];
+  };
+
+  const double ratio = static_cast<double>(fmt.sampleRate()) / static_cast<double>(sampleRate);
+  for (qsizetype outFrame = 0; outFrame < targetFrames; ++outFrame) {
+    const double srcPos = static_cast<double>(outFrame) * ratio;
+    const qsizetype srcIndex0 = static_cast<qsizetype>(std::floor(srcPos));
+    const qsizetype srcIndex1 = std::min(captureFrames - 1, srcIndex0 + 1);
+    const double frac = srcPos - static_cast<double>(srcIndex0);
+    for (int outCh = 0; outCh < channelCount; ++outCh) {
+      const double s0 = sourceSampleAt(srcIndex0, outCh);
+      const double s1 = sourceSampleAt(srcIndex1, outCh);
+      result.interleaved.push_back(std::clamp(s0 + (s1 - s0) * frac, -1.0, 1.0));
+    }
+  }
+
+  return !result.interleaved.empty();
+}
+
+bool MainWindow::startAsyncRecordHandle(std::uint64_t handleId,
+                                        const auxAsyncRecordSpec& spec,
+                                        std::string& err) {
+  if (handleId == 0) {
+    err = "Invalid recording handle id.";
+    return false;
+  }
+  if (recordingSessions_.find(handleId) != recordingSessions_.end()) {
+    err = "Recording handle is already active.";
+    return false;
+  }
+  if (spec.sample_rate <= 0) {
+    err = "Async record requires a positive sample rate.";
+    return false;
+  }
+  if (spec.num_channels != 1 && spec.num_channels != 2) {
+    err = "Async record supports only mono or stereo capture.";
+    return false;
+  }
+  if (!(spec.block_ms > 0.0)) {
+    err = "Async record requires a positive block duration.";
+    return false;
+  }
+  if (!(spec.duration_ms > 0.0 || spec.duration_ms == -1.0)) {
+    err = "Async record duration must be positive or -1.";
+    return false;
+  }
+  if (spec.callback_name.empty()) {
+    err = "Async record callback name is empty.";
+    return false;
+  }
+
+  {
+    std::string reloadErr;
+    bool reloaded = false;
+    if (!currentUdfFilePath_.isEmpty()) {
+      const QFileInfo currentInfo(currentUdfFilePath_);
+      if (currentInfo.exists() &&
+          currentInfo.completeBaseName().compare(QString::fromStdString(spec.callback_name), Qt::CaseInsensitive) == 0) {
+        reloaded = engine_.loadUdfFile(currentUdfFilePath_.toStdString(), reloadErr);
+      }
+    }
+    if (!reloaded) {
+      reloaded = engine_.reloadUdfByName(spec.callback_name, reloadErr);
+    }
+    if (!reloaded) {
+      err = reloadErr.empty() ? ("Failed to reload callback UDF '" + spec.callback_name + "'.") : reloadErr;
+      return false;
+    }
+  }
+
+  const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
+  if (inputs.isEmpty()) {
+    err = "No audio input devices are available.";
+    return false;
+  }
+
+  QAudioDevice selected = QMediaDevices::defaultAudioInput();
+  if (spec.device_id > 0) {
+    if (spec.device_id >= inputs.size()) {
+      err = "Requested audio input device is out of range.";
+      return false;
+    }
+    selected = inputs[spec.device_id];
+  } else if (selected.isNull()) {
+    selected = inputs.front();
+  }
+  if (selected.isNull()) {
+    err = "Failed to select an audio input device.";
+    return false;
+  }
+
+  QAudioFormat fmt = selected.preferredFormat();
+  if (fmt.sampleRate() <= 0 || fmt.channelCount() <= 0 || fmt.sampleFormat() == QAudioFormat::Unknown) {
+    err = "The selected audio input device does not expose a usable recording format.";
+    return false;
+  }
+  if (spec.num_channels == 2 && fmt.channelCount() < 2) {
+    err = QString("Requested stereo capture, but selected input device '%1' provides only %2 channel(s).")
+              .arg(selected.description())
+              .arg(fmt.channelCount())
+              .toStdString();
+    return false;
+  }
+
+  QMicrophonePermission microphonePermission;
+  Qt::PermissionStatus permissionStatus = qApp->checkPermission(microphonePermission);
+  if (permissionStatus == Qt::PermissionStatus::Undetermined) {
+    QEventLoop permissionLoop;
+    qApp->requestPermission(microphonePermission, this, [&](const QPermission& permission) {
+      permissionStatus = qApp->checkPermission(permission);
+      permissionLoop.quit();
+    });
+    permissionLoop.exec();
+  }
+  if (permissionStatus != Qt::PermissionStatus::Granted) {
+    err = "Microphone permission was denied for auxlab2.";
+    return false;
+  }
+
+  auto session = RecordingSession{};
+  session.handleId = handleId;
+  session.sampleRate = spec.sample_rate;
+  session.channelCount = spec.num_channels;
+  session.deviceId = spec.device_id;
+  session.callbackName = QString::fromStdString(spec.callback_name);
+  session.callbackIndex = 0;
+  session.callbackOpenDelivered = false;
+  session.captureSampleRate = fmt.sampleRate();
+  session.captureChannels = fmt.channelCount();
+  session.captureBytesPerSample = fmt.bytesPerSample();
+  session.captureSampleFormat = static_cast<int>(fmt.sampleFormat());
+  session.durationMs = spec.duration_ms;
+  session.blockMs = spec.block_ms;
+  session.remainingDurationMs =
+      spec.duration_ms > 0.0 ? std::max(1, static_cast<int>(std::llround(spec.duration_ms))) : -1;
+  session.active = true;
+  session.paused = false;
+  session.source = new QAudioSource(selected, fmt, this);
+  auto* sink = new AudioCaptureSink(this);
+  sink->open(QIODevice::WriteOnly);
+  session.sink = sink;
+
+  if (spec.duration_ms > 0.0) {
+    auto* stopTimer = new QTimer(this);
+    stopTimer->setSingleShot(true);
+    connect(stopTimer, &QTimer::timeout, this, [this, handleId]() {
+      auto it = recordingSessions_.find(handleId);
+      if (it != recordingSessions_.end()) {
+        it->second.stopDueToTimeout = true;
+      }
+      std::string ignored;
+      controlAsyncRecordHandle(handleId, auxRecordCommand::AUX_RECORD_STOP, ignored);
+    });
+    stopTimer->start(session.remainingDurationMs);
+    session.stopTimer = stopTimer;
+  }
+
+  session.source->start(session.sink);
+  if (session.source->state() == QAudio::StoppedState && session.source->error() != QAudio::NoError) {
+    err = "Failed to start async audio capture.";
+    if (session.stopTimer) {
+      session.stopTimer->stop();
+      session.stopTimer->deleteLater();
+    }
+    session.sink->deleteLater();
+    session.source->deleteLater();
+    return false;
+  }
+
+  recordingSessions_[handleId] = session;
+  lastStartedAsyncRecordHandle_ = handleId;
+  lastStartedAsyncRecordCallback_ = session.callbackName;
+  engine_.updateRuntimeHandleMembers(handleId,
+                                     {{"fs", static_cast<double>(spec.sample_rate)},
+                                      {"channels", static_cast<double>(spec.num_channels)},
+                                      {"dur", spec.duration_ms},
+                                      {"block", spec.block_ms},
+                                      {"durRec", 0.0},
+                                      {"durLeft", spec.duration_ms > 0.0 ? spec.duration_ms : 0.0},
+                                      {"prog", 0.0},
+                                      {"active", 1.0},
+                                      {"paused", 0.0}});
+  refreshVariables();
+  return true;
+}
+
+bool MainWindow::controlAsyncRecordHandle(std::uint64_t handleId,
+                                          auxRecordCommand command,
+                                          std::string& err) {
+  auto it = recordingSessions_.find(handleId);
+  if (it == recordingSessions_.end()) {
+    err = "Invalid or inactive recording handle.";
+    return false;
+  }
+
+  RecordingSession& session = it->second;
+  switch (command) {
+    case auxRecordCommand::AUX_RECORD_STOP: {
+      const bool stopDueToTimeout = session.stopDueToTimeout;
+      session.stopDueToTimeout = false;
+      processRecordingSessions();
+      if (session.stopTimer) {
+        session.stopTimer->stop();
+        session.stopTimer->deleteLater();
+        session.stopTimer = nullptr;
+      }
+      if (session.source) {
+        session.source->stop();
+      }
+      processRecordingSessions();
+
+      if (stopDueToTimeout && session.durationMs > 0.0 && session.sampleRate > 0 && session.channelCount > 0) {
+        const qsizetype targetFrames = std::max<qsizetype>(
+            0, static_cast<qsizetype>(std::llround(session.durationMs * static_cast<double>(session.sampleRate) / 1000.0)));
+        if (session.outputFramesProduced < targetFrames) {
+          const qsizetype missingFrames = targetFrames - session.outputFramesProduced;
+          const qsizetype missingSamples = missingFrames * static_cast<qsizetype>(session.channelCount);
+          session.pendingConvertedInterleaved.insert(session.pendingConvertedInterleaved.end(),
+                                                     static_cast<size_t>(missingSamples),
+                                                     0.0);
+          session.outputFramesProduced = targetFrames;
+        }
+      }
+
+      if (!session.pendingConvertedInterleaved.empty()) {
+        session.readyBlocks.push_back(session.pendingConvertedInterleaved);
+        session.pendingConvertedInterleaved.clear();
+      }
+
+      const bool previousSuppressWindowActivation = suppressWindowActivation_;
+      suppressWindowActivation_ = true;
+      while (!session.readyBlocks.empty()) {
+        auxRecordCallbackPayload payload;
+        payload.sample_rate = session.sampleRate;
+        payload.num_channels = session.channelCount;
+        payload.callback_index = session.callbackIndex + 1;
+        payload.interleaved = std::move(session.readyBlocks.front());
+        session.readyBlocks.erase(session.readyBlocks.begin());
+
+        std::string output;
+        if (!engine_.invokeRecordCallback(session.handleId, session.callbackName.toStdString(), payload, output)) {
+          err = output.empty() ? "Error in recording callback during final flush." : output;
+          break;
+        }
+        engine_.attachRecordCallbackOutputsToHandle(session.handleId, session.handleId);
+        syncRecordCallbackGraphicsOutputs(session.handleId);
+        session.callbackIndex = payload.callback_index;
+        if (!output.empty()) {
+          appendConsoleMessage(QString::fromStdString(output).trimmed());
+        }
+      }
+      suppressWindowActivation_ = previousSuppressWindowActivation;
+
+      if (session.source) {
+        session.source->deleteLater();
+        session.source = nullptr;
+      }
+      if (session.sink) {
+        session.sink->close();
+        session.sink->deleteLater();
+        session.sink = nullptr;
+      }
+      const double durRecMs =
+          1000.0 * static_cast<double>(session.outputFramesProduced) / static_cast<double>(std::max(1, session.sampleRate));
+      std::map<std::string, double> members{{"active", 0.0}, {"paused", 0.0}};
+      if (session.durationMs > 0.0) {
+        if (stopDueToTimeout) {
+          members["durRec"] = session.durationMs;
+          members["durLeft"] = 0.0;
+          members["prog"] = 100.0;
+        } else {
+          members["durRec"] = durRecMs;
+          members["durLeft"] = std::max(0.0, session.durationMs - durRecMs);
+          members["prog"] = std::clamp(100.0 * durRecMs / session.durationMs, 0.0, 100.0);
+        }
+      } else {
+        members["durRec"] = durRecMs;
+        members["durLeft"] = 0.0;
+        members["prog"] = 0.0;
+      }
+      engine_.updateRuntimeHandleMembers(handleId, members);
+      recordingSessions_.erase(it);
+      refreshVariables();
+      return true;
+    }
+    case auxRecordCommand::AUX_RECORD_PAUSE: {
+      if (!session.source) {
+        err = "Recording session is not running.";
+        return false;
+      }
+      processRecordingSessions();
+      session.source->suspend();
+      if (session.stopTimer) {
+        const int remaining = session.stopTimer->remainingTime();
+        if (remaining > 0) {
+          session.remainingDurationMs = remaining;
+        }
+        session.stopTimer->stop();
+      }
+      session.paused = true;
+      engine_.updateRuntimeHandleMembers(handleId, {{"paused", 1.0}});
+      refreshVariables();
+      return true;
+    }
+    case auxRecordCommand::AUX_RECORD_RESUME: {
+      if (!session.source) {
+        err = "Recording session is not running.";
+        return false;
+      }
+      session.source->resume();
+      if (session.stopTimer && session.remainingDurationMs > 0) {
+        session.stopTimer->start(session.remainingDurationMs);
+      }
+      session.paused = false;
+      engine_.updateRuntimeHandleMembers(handleId, {{"paused", 0.0}});
+      refreshVariables();
+      return true;
+    }
+  }
+
+  err = "Unsupported async record command.";
+  return false;
+}
+
 void MainWindow::refreshPlaybackHandles() {
   bool anyFinished = false;
   for (auto it = playbackSessions_.begin(); it != playbackSessions_.end();) {
@@ -4234,6 +5222,9 @@ void MainWindow::focusWindow(QWidget* window) const {
     window->showNormal();
   } else {
     window->show();
+  }
+  if (suppressWindowActivation_) {
+    return;
   }
   window->raise();
   window->activateWindow();

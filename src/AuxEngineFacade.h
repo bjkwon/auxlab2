@@ -23,8 +23,14 @@ struct EvalResult {
   std::string output;
 };
 
+struct SignalSegment {
+  int startSample = 0;
+  int length = 0;
+};
+
 struct ChannelData {
   std::vector<double> samples;
+  std::vector<SignalSegment> segments;
 };
 
 struct SignalData {
@@ -78,12 +84,15 @@ public:
   bool isCellVar(const std::string& varName) const;
   std::optional<std::string> getStringValue(const std::string& varName) const;
   bool loadUdfFile(const std::string& fullPath, std::string& err);
+  bool reloadUdfByName(const std::string& udfName, std::string& err);
   bool setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err);
   std::set<int> getBreakpoints(const std::string& udfName) const;
 
   bool deleteVar(const std::string& varName);
   bool setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids);
   bool updateRuntimeHandleMembers(std::uint64_t handleId, const std::map<std::string, double>& members);
+  bool invokeRecordCallback(std::uint64_t sessionId, const std::string& callbackName, const auxRecordCallbackPayload& payload, std::string& output);
+  bool attachRecordCallbackOutputsToHandle(std::uint64_t sessionId, std::uint64_t handleId);
   std::string engineVersion() const;
 
   bool isPaused() const;

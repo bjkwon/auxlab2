@@ -277,6 +277,7 @@ void SignalGraphWindow::updateData(const SignalData& data) {
   const int oldViewEnd = viewStart_ + std::max(0, viewLen_);
   const bool wasNearFullView =
       (oldTotalLen > 0 && viewStart_ <= 1 && oldViewEnd >= oldTotalLen - 1);
+  const bool hadNoUsablePriorView = (oldTotalLen <= 0 || viewLen_ <= 0);
 
   data_ = data;
   graphics_.updateSignalData(data_);
@@ -289,7 +290,7 @@ void SignalGraphWindow::updateData(const SignalData& data) {
   fftDataSerial_ = -1;
   if (!data_.channels.empty()) {
     const int totalLen = std::max(1, totalTimelineSamples(data_));
-    if (wasNearFullView) {
+    if (wasNearFullView || hadNoUsablePriorView) {
       // Keep showing the whole signal when user was viewing full extent.
       viewStart_ = 0;
       viewLen_ = totalLen;
@@ -394,6 +395,28 @@ void SignalGraphWindow::applyXDataToAllLines(const QVector<double>& xdata) {
 void SignalGraphWindow::refreshGraphics() {
   syncFigurePosFromWidget();
   updateYRange();
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::setAxesXLim(std::uint64_t axesId, const std::array<double, 2>& xlim) {
+  auto* axes = graphics_.axesByIdMutable(axesId);
+  if (!axes) {
+    return;
+  }
+  axes->xlim = xlim;
+  axes->autoXLim = false;
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::setAxesYLim(std::uint64_t axesId, const std::array<double, 2>& ylim) {
+  auto* axes = graphics_.axesByIdMutable(axesId);
+  if (!axes) {
+    return;
+  }
+  axes->ylim = ylim;
+  axes->autoYLim = false;
   invalidateStaticLayer();
   update();
 }
@@ -723,6 +746,7 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
   const QVector<double>& xdata = line.xdata;
   const QVector<double>& ydata = line.ydata;
   const bool deriveAudioX = data_.isAudio && data_.sampleRate > 0 && xdata.isEmpty();
+  const bool manualAudioX = deriveAudioX && !axes.autoXLim;
   if (ydata.isEmpty() || viewLen_ <= 0) {
     return;
   }
@@ -741,8 +765,15 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
   int to = -1;
   if (deriveAudioX) {
     const int totalLen = ydata.size();
-    from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
-    to = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
+    if (manualAudioX) {
+      const double sampleRate = static_cast<double>(data_.sampleRate);
+      const double t0 = data_.startTimeSec;
+      from = std::clamp(static_cast<int>(std::floor((xmin - t0) * sampleRate)), 0, std::max(0, totalLen - 1));
+      to = std::clamp(static_cast<int>(std::ceil((xmax - t0) * sampleRate)) + 1, from + 1, totalLen);
+    } else {
+      from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
+      to = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
+    }
   } else {
     for (int i = 0; i < xdata.size(); ++i) {
       if (xdata[i] >= xmin && xdata[i] <= xmax) {
@@ -766,22 +797,32 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
   const double samplesPerPixel = static_cast<double>(to - from) / width;
   if (samplesPerPixel <= 1.0 && pen.style() != Qt::NoPen) {
     QPainterPath path;
-    bool first = true;
+    bool segmentOpen = false;
     QVector<QPointF> markerPoints;
     for (int i = from; i < to; ++i) {
       const double y = ydata[i];
+      if (!std::isfinite(y)) {
+        segmentOpen = false;
+        continue;
+      }
       const double yNorm = (y - yminAxis) / yspan;
       double px = 0.0;
       if (deriveAudioX) {
-        px = sampleToX(area, i);
+        if (manualAudioX) {
+          const double t = data_.startTimeSec + static_cast<double>(i) / static_cast<double>(data_.sampleRate);
+          const double xNorm = (t - xmin) / xspan;
+          px = area.left() + xNorm * area.width();
+        } else {
+          px = sampleToX(area, i);
+        }
       } else {
         const double xNorm = (xdata[i] - xmin) / xspan;
         px = area.left() + xNorm * area.width();
       }
       const double py = area.bottom() - yNorm * area.height();
-      if (first) {
+      if (!segmentOpen) {
         path.moveTo(px, py);
-        first = false;
+        segmentOpen = true;
       } else {
         path.lineTo(px, py);
       }
@@ -806,13 +847,33 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
     double vmax = std::numeric_limits<double>::lowest();
     bool any = false;
     if (deriveAudioX) {
-      const int total = std::max(1, viewLen_ - 1);
-      const int binStartSample = viewStart_ + static_cast<int>(std::floor((static_cast<double>(x) * total) / width));
-      const int binEndSample = viewStart_ + static_cast<int>(std::ceil((static_cast<double>(x + 1) * total) / width));
-      const int s0 = std::clamp(binStartSample, from, to - 1);
-      const int s1 = std::clamp(std::max(s0 + 1, binEndSample), s0 + 1, to);
+      int s0 = from;
+      int s1 = to;
+      if (manualAudioX) {
+        const double sampleRate = static_cast<double>(data_.sampleRate);
+        const double binStart = xmin + (xspan * x) / width;
+        const double binEnd = xmin + (xspan * (x + 1)) / width;
+        const double sampleStart = (binStart - data_.startTimeSec) * sampleRate;
+        const double sampleEnd = (binEnd - data_.startTimeSec) * sampleRate;
+        if (sampleEnd <= from || sampleStart >= to) {
+          continue;
+        }
+        const int binStartSample = static_cast<int>(std::floor(sampleStart));
+        const int binEndSample = static_cast<int>(std::ceil(sampleEnd));
+        s0 = std::clamp(binStartSample, from, to - 1);
+        s1 = std::clamp(binEndSample, s0 + 1, to);
+      } else {
+        const int total = std::max(1, viewLen_ - 1);
+        const int binStartSample = viewStart_ + static_cast<int>(std::floor((static_cast<double>(x) * total) / width));
+        const int binEndSample = viewStart_ + static_cast<int>(std::ceil((static_cast<double>(x + 1) * total) / width));
+        s0 = std::clamp(binStartSample, from, to - 1);
+        s1 = std::clamp(std::max(s0 + 1, binEndSample), s0 + 1, to);
+      }
       for (int i = s0; i < s1; ++i) {
         const double v = ydata[i];
+        if (!std::isfinite(v)) {
+          continue;
+        }
         vmin = std::min(vmin, v);
         vmax = std::max(vmax, v);
         any = true;
@@ -825,6 +886,9 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
           continue;
         }
         const double v = ydata[i];
+        if (!std::isfinite(v)) {
+          continue;
+        }
         vmin = std::min(vmin, v);
         vmax = std::max(vmax, v);
         any = true;
@@ -1142,6 +1206,9 @@ void SignalGraphWindow::syncVisibleXRangeToAxes() {
     if (!axes) {
       continue;
     }
+    if (!axes->autoXLim) {
+      continue;
+    }
     const auto lines = graphics_.linesForAxes(axes->common.id);
     if (lines.empty()) {
       continue;
@@ -1360,6 +1427,7 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverInFft_ = false;
   hoverFftValue_ = 0.0;
   hoverFftFreqHz_ = 0.0;
+  hoverXCoord_ = 0.0;
 
   if (showFftOverlay_ && data_.isAudio && data_.sampleRate > 0) {
     ensureFftData();
@@ -1387,13 +1455,29 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
     return;
   }
 
-  hoverActive_ = true;
-  hoverSample_ = xToSample(pt);
-
   const auto* axes = graphics_.leftChannelAxes();
   if (!axes) {
+    hoverActive_ = false;
+    hoverSample_ = -1;
     hoverValue_ = 0.0;
     return;
+  }
+  const QRect axesRect = axesRectForPlot(*axes, plot);
+  if (!axesRect.contains(pt)) {
+    hoverActive_ = false;
+    hoverSample_ = -1;
+    hoverValue_ = 0.0;
+    return;
+  }
+
+  hoverActive_ = true;
+  const double x01 = std::clamp((pt.x() - axesRect.left()) / static_cast<double>(std::max(1, axesRect.width())), 0.0, 1.0);
+  hoverXCoord_ = axes->xlim[0] + x01 * (axes->xlim[1] - axes->xlim[0]);
+  if (data_.isAudio && data_.sampleRate > 0) {
+    const double samplePos = (hoverXCoord_ - data_.startTimeSec) * static_cast<double>(data_.sampleRate);
+    hoverSample_ = std::clamp(static_cast<int>(std::llround(samplePos)), 0, std::max(0, totalTimelineSamples(data_) - 1));
+  } else {
+    hoverSample_ = xToSample(pt);
   }
   const auto lines = graphics_.linesForAxes(axes->common.id);
   if (lines.empty()) {
@@ -1404,7 +1488,7 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   if (line && hoverSample_ >= 0 && hoverSample_ < line->ydata.size()) {
     hoverValue_ = line->ydata[hoverSample_];
   } else {
-    hoverValue_ = 0.0;
+    hoverValue_ = std::numeric_limits<double>::quiet_NaN();
   }
 }
 
@@ -1631,10 +1715,18 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
   const QString mouseText =
       (hoverActive_ && hoverInFft_)
           ? QString("(%1, %2 Hz)").arg(hoverFftValue_, 0, 'f', 2).arg(hoverFftFreqHz_, 0, 'f', 1)
-          : ((hoverActive_ && hoverSample_ >= 0) ? QString("(%1,%2)").arg(formatTimeValue(hoverSample_, false)).arg(hoverValue_, 0, 'f', 3)
+          : ((hoverActive_ && hoverSample_ >= 0)
+                 ? QString("(%1,%2)")
+                       .arg(QString::number(hoverXCoord_, 'g', 4))
+                       .arg(std::isfinite(hoverValue_) ? QString::number(hoverValue_, 'f', 3) : QString("null"))
                                                  : QString());
-  const QString viewStartText = formatTimeValue(viewStart_, true);
-  const QString viewEndText = formatTimeValue(viewStart_ + std::max(1, viewLen_) - 1, true);
+  const auto* axes = graphics_.leftChannelAxes();
+  const QString viewStartText =
+      axes ? (data_.isAudio ? formatSecondsCompact(axes->xlim[0]) + "s" : QString::number(axes->xlim[0], 'g', 6))
+           : formatTimeValue(viewStart_, true);
+  const QString viewEndText =
+      axes ? (data_.isAudio ? formatSecondsCompact(axes->xlim[1]) + "s" : QString::number(axes->xlim[1], 'g', 6))
+           : formatTimeValue(viewStart_ + std::max(1, viewLen_) - 1, true);
   const QString selStartText = hasSel ? formatTimeValue(sel.start, true) : QString();
   const QString selEndText = hasSel ? formatTimeValue(sel.end, true) : QString();
   const QString rmsText = formatRmsInfo(rmsRange);

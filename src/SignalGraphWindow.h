@@ -59,6 +59,8 @@ public:
   std::array<double, 4> currentFigurePos() const;
   void applyFigurePos(const std::array<double, 4>& pos);
   void refreshGraphics();
+  void setAxesXLim(std::uint64_t axesId, const std::array<double, 2>& xlim);
+  void setAxesYLim(std::uint64_t axesId, const std::array<double, 2>& ylim);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -134,6 +136,7 @@ private:
   int selEnd_ = -1;
   bool hoverActive_ = false;
   int hoverSample_ = -1;
+  double hoverXCoord_ = 0.0;
   double hoverValue_ = 0.0;
   bool hoverInFft_ = false;
   double hoverFftValue_ = 0.0;

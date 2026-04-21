@@ -109,6 +109,36 @@ void CommandConsole::appendExecutionResult(const QString& output) {
   appendPrompt();
 }
 
+void CommandConsole::appendAsyncOutput(const QString& output) {
+  if (output.trimmed().isEmpty()) {
+    return;
+  }
+
+  const QString pendingInput = currentCommand();
+  const int promptStart = std::max(0, inputStartPos_ - static_cast<int>(prompt_.size()));
+
+  QTextCursor c(document());
+  c.setPosition(promptStart);
+  c.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+  c.removeSelectedText();
+
+  c.movePosition(QTextCursor::End);
+  if (!document()->isEmpty()) {
+    c.insertText("\n");
+  }
+  c.insertText(output);
+  if (!output.endsWith('\n')) {
+    c.insertText("\n");
+  }
+  c.insertText(prompt_);
+  inputStartPos_ = c.position();
+  if (!pendingInput.isEmpty()) {
+    c.insertText(pendingInput);
+  }
+  setTextCursor(c);
+  ensureEditableCursor();
+}
+
 void CommandConsole::keyPressEvent(QKeyEvent* event) {
   const int key = event->key();
   const auto mods = event->modifiers();

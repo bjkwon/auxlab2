@@ -75,6 +75,10 @@ if(WIN32)
    endif()
 endif()
 
+if(APPLE)
+  include("${Qt6_DIR}/../Qt6Core/Qt6QDarwinMicrophonePermissionPluginConfig.cmake" OPTIONAL)
+endif()
+
 if(NOT Qt6_FOUND)
   message(FATAL_ERROR
     "Qt6 (Widgets, Multimedia) not found.\n"
@@ -206,6 +210,7 @@ if(APPLE)
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.auxlab2.app"
     MACOSX_BUNDLE_BUNDLE_VERSION "${AUXLAB2_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${AUXLAB2_VERSION}"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist.in"
   )
 
   set(AUXLAB2_ICON_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/auxlab2.icns")
@@ -248,6 +253,16 @@ target_link_libraries(auxlab2 PRIVATE
   Qt6::Multimedia
   auxe
 )
+
+if(APPLE AND TARGET Qt6::QDarwinMicrophonePermissionPlugin)
+  set_target_properties(auxlab2 PROPERTIES
+    _qt_has_QDarwinMicrophonePermissionPlugin_usage_description TRUE
+  )
+  target_link_libraries(auxlab2 PRIVATE
+    Qt6::QDarwinMicrophonePermissionPlugin
+    Qt6::QDarwinMicrophonePermissionPlugin_init
+  )
+endif()
 
 install(TARGETS auxlab2
   BUNDLE DESTINATION .

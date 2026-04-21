@@ -19,12 +19,15 @@
 
 class QListWidget;
 class QListWidgetItem;
+class QAudioSource;
+class QIODevice;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QAction;
 class QMenu;
 class QSplitter;
 class QFileSystemWatcher;
+class AudioCaptureSink;
 class CommandConsole;
 class SignalGraphWindow;
 class SignalTableWindow;
@@ -51,8 +54,17 @@ public:
   std::uint64_t createGraphicsAxesFromHandle(std::uint64_t handleId, std::string& err);
   std::uint64_t createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err);
   bool deleteGraphicsHandle(std::uint64_t handleId, std::string& err);
+  bool repaintGraphicsHandle(std::uint64_t handleId, std::string& err);
   bool startPlaybackHandle(std::uint64_t handleId, AuxObj obj, int repeatCount, bool reuseExistingHandle, std::string& err);
   bool controlPlaybackHandle(std::uint64_t handleId, auxPlaybackCommand command, std::string& err);
+  bool startAsyncRecordHandle(std::uint64_t handleId, const auxAsyncRecordSpec& spec, std::string& err);
+  bool controlAsyncRecordHandle(std::uint64_t handleId, auxRecordCommand command, std::string& err);
+  bool recordAudio(int deviceId,
+                   int sampleRate,
+                   int channelCount,
+                   double durationMs,
+                   auxRecordResult& result,
+                   std::string& err);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -77,10 +89,13 @@ private:
   void buildMenus();
   void connectSignals();
 
-  void runCommand(const QString& cmd);
+  void runCommand(const QString& cmd, bool addToHistory = true);
   bool tryHandleGraphicsCommand(const QString& cmd, QString& output);
   void onAsyncPollTick();
+  void processRecordingSessions();
+  void syncRecordCallbackGraphicsOutputs(std::uint64_t recordHandleId);
   void updateCommandPrompt();
+  void appendConsoleMessage(const QString& text);
   QString selectedVarName() const;
   QStringList selectedVarNames(QTreeWidget* box) const;
   void deleteVariablesFromBox(QTreeWidget* box);
@@ -226,6 +241,38 @@ private:
 
   std::map<std::uint64_t, PlaybackSession> playbackSessions_;
 
+  struct RecordingSession {
+    std::uint64_t handleId = 0;
+    QAudioSource* source = nullptr;
+    AudioCaptureSink* sink = nullptr;
+    QTimer* stopTimer = nullptr;
+    int sampleRate = 0;
+    int channelCount = 0;
+    int deviceId = 0;
+    QString callbackName;
+    int callbackIndex = 0;
+    bool callbackOpenDelivered = false;
+    int captureSampleRate = 0;
+    int captureChannels = 0;
+    int captureBytesPerSample = 0;
+    int captureSampleFormat = -1;
+    double durationMs = -1.0;
+    double blockMs = 100.0;
+    int remainingDurationMs = -1;
+    qsizetype rawBytesConsumed = 0;
+    qsizetype outputFramesProduced = 0;
+    std::vector<double> capturedInterleaved;
+    std::vector<double> pendingConvertedInterleaved;
+    std::vector<std::vector<double>> readyBlocks;
+    bool active = false;
+    bool paused = false;
+    bool stopDueToTimeout = false;
+  };
+
+  std::map<std::uint64_t, RecordingSession> recordingSessions_;
+  std::uint64_t lastStartedAsyncRecordHandle_ = 0;
+  QString lastStartedAsyncRecordCallback_;
+
   int historyNavIndex_ = -1;
   QString historyDraft_;
   bool reverseSearchActive_ = false;
@@ -236,4 +283,5 @@ private:
   QString currentUdfName_;
   QStringList recentUdfFiles_;
   QTimer* asyncPollTimer_ = nullptr;
+  bool suppressWindowActivation_ = false;
 };

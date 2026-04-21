@@ -106,7 +106,11 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
       }
       const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
       std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
+      channel.segments.push_back({static_cast<int>(start), static_cast<int>(count)});
     }
+    std::sort(channel.segments.begin(), channel.segments.end(), [](const SignalSegment& lhs, const SignalSegment& rhs) {
+      return lhs.startSample < rhs.startSample;
+    });
     data.channels.push_back(std::move(channel));
   }
 
@@ -1007,6 +1011,41 @@ bool AuxEngineFacade::loadUdfFile(const std::string& fullPath, std::string& err)
   return true;
 }
 
+bool AuxEngineFacade::reloadUdfByName(const std::string& udfName, std::string& err) {
+  if (udfName.empty()) {
+    err = "UDF name is empty.";
+    return false;
+  }
+
+  std::vector<std::filesystem::path> searchRoots;
+  const RuntimeSettingsSnapshot settings = runtimeSettings();
+  searchRoots.reserve(settings.udfPaths.size() + 1);
+  for (const std::string& rawPath : settings.udfPaths) {
+    if (!rawPath.empty()) {
+      searchRoots.emplace_back(rawPath);
+    }
+  }
+  searchRoots.emplace_back(std::filesystem::current_path());
+
+  const std::filesystem::path fileName = udfName + ".aux";
+  for (const auto& root : searchRoots) {
+    std::error_code ec;
+    const std::filesystem::path candidate = root / fileName;
+    if (!std::filesystem::exists(candidate, ec) || ec) {
+      continue;
+    }
+    std::string loadErr;
+    if (loadUdfFile(candidate.string(), loadErr)) {
+      return true;
+    }
+    err = loadErr;
+    return false;
+  }
+
+  err = "UDF file not found: " + fileName.string();
+  return false;
+}
+
 bool AuxEngineFacade::setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err) {
   if (!activeCtx_) {
     err = "AUX context is not initialized.";
@@ -1075,6 +1114,51 @@ bool AuxEngineFacade::updateRuntimeHandleMembers(std::uint64_t handleId, const s
     updated = true;
   }
   if (rootCtx_ && rootCtx_ != activeCtx_ && aux_update_runtime_handle_members(rootCtx_, handleId, members) == 0) {
+    updated = true;
+  }
+  return updated;
+}
+
+bool AuxEngineFacade::invokeRecordCallback(std::uint64_t sessionId,
+                                           const std::string& callbackName,
+                                           const auxRecordCallbackPayload& payload,
+                                           std::string& output) {
+  auxContext* ctx = activeCtx_ ? activeCtx_ : rootCtx_;
+  if (!ctx) {
+    output = "AUX engine is not initialized.";
+    return false;
+  }
+
+  std::string preview;
+  std::string captured;
+  int status = 1;
+  {
+    ScopedStdCapture cap;
+    status = aux_invoke_record_callback(&ctx, sessionId, callbackName, payload, cfg_, preview);
+    captured = filterCapturedNoise(cap.output());
+  }
+
+  output = captured;
+  if (!preview.empty()) {
+    if (!output.empty() && output.back() != '\n') {
+      output.push_back('\n');
+    }
+    output += preview;
+  }
+
+  activeCtx_ = ctx ? ctx : rootCtx_;
+  paused_ = false;
+  return status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
+}
+
+bool AuxEngineFacade::attachRecordCallbackOutputsToHandle(std::uint64_t sessionId,
+                                                          std::uint64_t handleId) {
+  bool updated = false;
+  if (activeCtx_ && aux_attach_record_callback_outputs_to_handle(activeCtx_, sessionId, handleId) == 0) {
+    updated = true;
+  }
+  if (rootCtx_ && rootCtx_ != activeCtx_ &&
+      aux_attach_record_callback_outputs_to_handle(rootCtx_, sessionId, handleId) == 0) {
     updated = true;
   }
   return updated;

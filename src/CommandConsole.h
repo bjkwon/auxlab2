@@ -13,6 +13,7 @@ public:
   void setPrompt(const QString& prompt);
   void submitCurrentCommand();
   void appendExecutionResult(const QString& output);
+  void appendAsyncOutput(const QString& output);
 
 signals:
   void commandSubmitted(const QString& cmd);

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <limits>
 
 namespace {
 std::array<double, 4> kDefaultMonoAxesPos{0.08, 0.18, 0.86, 0.72};
@@ -37,7 +39,21 @@ GraphicsFigureModel GraphicsFigureModel::createSignalFigure(const QString& title
 
 void GraphicsFigureModel::updateSignalData(const SignalData& data) {
   const int newChannelCount = static_cast<int>(data.channels.size());
-  if (newChannelCount != channelCount_) {
+  if (newChannelCount == 1 && !axes_.empty() && lines_.empty()) {
+    channelCount_ = 1;
+    stereoOverlay_ = false;
+    if (currentAxesId_ == 0 || !axesByIdMutable(currentAxesId_)) {
+      currentAxesId_ = axes_.front().common.id;
+    }
+    if (linesForAxes(currentAxesId_).empty()) {
+      addDefaultLine(currentAxesId_, 0, kDefaultLeftLineColor);
+    }
+    syncLineData(data);
+    applyStereoLayout();
+    return;
+  }
+
+  if (newChannelCount != channelCount_ || (newChannelCount > 0 && (axes_.empty() || lines_.empty()))) {
     rebuildSignalChildren(data);
     return;
   }
@@ -216,8 +232,12 @@ std::uint64_t GraphicsFigureModel::addLine(std::uint64_t axesId, const QVector<d
   }
   if (std::fabs(xmax - xmin) < 1e-12) xmax = xmin + 1.0;
   if (std::fabs(ymax - ymin) < 1e-12) ymax = ymin + 1.0;
-  axIt->xlim = {xmin, xmax};
-  axIt->ylim = {ymin, ymax};
+  if (axIt->autoXLim) {
+    axIt->xlim = {xmin, xmax};
+  }
+  if (axIt->autoYLim) {
+    axIt->ylim = {ymin, ymax};
+  }
   return line.common.id;
 }
 
@@ -256,9 +276,25 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
     }
 
     const auto& channel = data.channels[static_cast<size_t>(line.logicalChannel)].samples;
+    const auto& segments = data.channels[static_cast<size_t>(line.logicalChannel)].segments;
     line.ydata.reserve(static_cast<qsizetype>(channel.size()));
-    for (size_t i = 0; i < channel.size(); ++i) {
-      line.ydata.push_back(channel[i]);
+    if (data.isAudio && !segments.empty()) {
+      const double gapValue = std::numeric_limits<double>::quiet_NaN();
+      line.ydata.fill(gapValue, static_cast<qsizetype>(channel.size()));
+      for (const auto& seg : segments) {
+        const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
+        if (start >= channel.size() || seg.length <= 0) {
+          continue;
+        }
+        const size_t count = std::min(static_cast<size_t>(seg.length), channel.size() - start);
+        for (size_t i = 0; i < count; ++i) {
+          line.ydata[static_cast<qsizetype>(start + i)] = channel[start + i];
+        }
+      }
+    } else {
+      for (size_t i = 0; i < channel.size(); ++i) {
+        line.ydata.push_back(channel[i]);
+      }
     }
 
     if (!data.isAudio || data.sampleRate <= 0) {
@@ -298,6 +334,9 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
       for (int i = 0; i < line.xdata.size(); ++i) {
         const double x = line.xdata[i];
         const double y = line.ydata[i];
+        if (!std::isfinite(y)) {
+          continue;
+        }
         if (!any) {
           xmin = xmax = x;
           ymin = ymax = y;
@@ -314,18 +353,28 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
       if (std::fabs(xmax - xmin) < 1e-12) {
         xmax = xmin + 1.0;
       }
-      axes.xlim = {xmin, xmax};
+      if (axes.autoXLim) {
+        axes.xlim = {xmin, xmax};
+      }
       if (data.isAudio) {
-        axes.ylim = {-1.0, 1.0};
+        if (axes.autoYLim) {
+          axes.ylim = {-1.0, 1.0};
+        }
       } else {
         if (std::fabs(ymax - ymin) < 1e-12) {
           ymax = ymin + 1.0;
         }
-        axes.ylim = {ymin, ymax};
+        if (axes.autoYLim) {
+          axes.ylim = {ymin, ymax};
+        }
       }
     } else {
-      axes.xlim = {0.0, 1.0};
-      axes.ylim = {-1.0, 1.0};
+      if (axes.autoXLim) {
+        axes.xlim = {0.0, 1.0};
+      }
+      if (axes.autoYLim) {
+        axes.ylim = {-1.0, 1.0};
+      }
     }
   }
 }

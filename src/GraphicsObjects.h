@@ -42,6 +42,8 @@ struct GraphicsAxesHandle {
   int lineWidth = 1;
   std::array<double, 2> xlim{0.0, 1.0};
   std::array<double, 2> ylim{-1.0, 1.0};
+  bool autoXLim = true;
+  bool autoYLim = true;
   QString fontName = "Helvetica";
   int fontSize = 11;
   QString xscale = "linear";
