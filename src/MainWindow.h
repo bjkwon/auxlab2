@@ -283,5 +283,6 @@ private:
   QString currentUdfName_;
   QStringList recentUdfFiles_;
   QTimer* asyncPollTimer_ = nullptr;
+  int asyncCapturePollMs_ = 300;
   bool suppressWindowActivation_ = false;
 };

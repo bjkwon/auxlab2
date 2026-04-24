@@ -41,7 +41,7 @@ void GraphicsFigureModel::updateSignalData(const SignalData& data) {
   const int newChannelCount = static_cast<int>(data.channels.size());
   if (newChannelCount == 1 && !axes_.empty() && lines_.empty()) {
     channelCount_ = 1;
-    stereoOverlay_ = false;
+    stereoDisplayMode_ = StereoDisplayMode::SplitAxes;
     if (currentAxesId_ == 0 || !axesByIdMutable(currentAxesId_)) {
       currentAxesId_ = axes_.front().common.id;
     }
@@ -60,12 +60,17 @@ void GraphicsFigureModel::updateSignalData(const SignalData& data) {
   syncLineData(data);
 }
 
-void GraphicsFigureModel::setStereoOverlay(bool overlay) {
-  if (stereoOverlay_ == overlay) {
+void GraphicsFigureModel::setStereoDisplayMode(StereoDisplayMode mode) {
+  if (stereoDisplayMode_ == mode) {
     return;
   }
-  stereoOverlay_ = overlay;
+  stereoDisplayMode_ = mode;
   applyStereoLayout();
+}
+
+void GraphicsFigureModel::setStereoOverlay(bool overlay) {
+  setStereoDisplayMode(overlay ? StereoDisplayMode::OverlayLeftForeground
+                               : StereoDisplayMode::SplitAxes);
 }
 
 void GraphicsFigureModel::applyStyleToAllLines(const std::optional<QColor>& color,
@@ -132,9 +137,28 @@ const GraphicsLineHandle* GraphicsFigureModel::lineById(std::uint64_t lineId) co
 
 std::vector<const GraphicsLineHandle*> GraphicsFigureModel::linesForAxes(std::uint64_t axesId) const {
   std::vector<const GraphicsLineHandle*> out;
+  const bool includeOverlayStereoPeer = stereoOverlay() &&
+                                        std::any_of(axes_.begin(), axes_.end(), [axesId](const GraphicsAxesHandle& axes) {
+                                          return axes.common.id == axesId && axes.logicalChannel == 0;
+                                        });
+  const GraphicsLineHandle* overlayPeer = nullptr;
   for (const auto& line : lines_) {
     if (line.common.parentId == axesId) {
       out.push_back(&line);
+      continue;
+    }
+    if (!includeOverlayStereoPeer) {
+      continue;
+    }
+    if (line.logicalChannel == 1) {
+      overlayPeer = &line;
+    }
+  }
+  if (overlayPeer) {
+    if (stereoDisplayMode_ == StereoDisplayMode::OverlayLeftForeground) {
+      out.insert(out.begin(), overlayPeer);
+    } else {
+      out.push_back(overlayPeer);
     }
   }
   return out;
@@ -146,7 +170,7 @@ void GraphicsFigureModel::rebuildSignalChildren(const SignalData& data) {
   texts_.clear();
   figure_.common.children.clear();
   channelCount_ = static_cast<int>(data.channels.size());
-  stereoOverlay_ = false;
+  stereoDisplayMode_ = StereoDisplayMode::SplitAxes;
 
   if (channelCount_ <= 0) {
     currentAxesId_ = 0;
@@ -398,7 +422,7 @@ void GraphicsFigureModel::applyStereoLayout() {
     return;
   }
 
-  if (stereoOverlay_) {
+  if (stereoOverlay()) {
     leftIt->common.pos = kDefaultMonoAxesPos;
     rightIt->common.pos = kDefaultMonoAxesPos;
     leftIt->common.visible = true;

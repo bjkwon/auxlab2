@@ -18,6 +18,12 @@ enum class GraphicsObjectType {
   Text,
 };
 
+enum class StereoDisplayMode {
+  SplitAxes,
+  OverlayLeftForeground,
+  OverlayRightForeground,
+};
+
 struct GraphicsObjectCommon {
   std::uint64_t id = 0;
   GraphicsObjectType type = GraphicsObjectType::Figure;
@@ -86,6 +92,7 @@ public:
                                                 const QString& sourcePath);
 
   void updateSignalData(const SignalData& data);
+  void setStereoDisplayMode(StereoDisplayMode mode);
   void setStereoOverlay(bool overlay);
   void applyStyleToAllLines(const std::optional<QColor>& color,
                             const QString& marker,
@@ -108,7 +115,8 @@ public:
   const std::vector<GraphicsLineHandle>& lines() const { return lines_; }
   const std::vector<GraphicsTextHandle>& texts() const { return texts_; }
 
-  bool stereoOverlay() const { return stereoOverlay_; }
+  StereoDisplayMode stereoDisplayMode() const { return stereoDisplayMode_; }
+  bool stereoOverlay() const { return stereoDisplayMode_ != StereoDisplayMode::SplitAxes; }
   bool isNamedPlot() const { return figure_.namedPlot; }
   const QString& sourcePath() const { return figure_.sourcePath; }
 
@@ -135,6 +143,6 @@ private:
   std::vector<GraphicsLineHandle> lines_;
   std::vector<GraphicsTextHandle> texts_;
   std::uint64_t currentAxesId_ = 0;
-  bool stereoOverlay_ = false;
+  StereoDisplayMode stereoDisplayMode_ = StereoDisplayMode::SplitAxes;
   int channelCount_ = 0;
 };

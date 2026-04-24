@@ -174,6 +174,6 @@ private:
   int cachedViewLen_ = -1;
   double cachedYMin_ = 0.0;
   double cachedYMax_ = 0.0;
-  bool cachedStereoOverlay_ = false;
+  StereoDisplayMode cachedStereoDisplayMode_ = StereoDisplayMode::SplitAxes;
   bool cachedWorkspaceActive_ = true;
 };

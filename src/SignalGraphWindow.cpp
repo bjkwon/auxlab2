@@ -921,7 +921,17 @@ void SignalGraphWindow::cycleStereoMode() {
   if (data_.channels.size() < 2) {
     return;
   }
-  graphics_.setStereoOverlay(!graphics_.stereoOverlay());
+  switch (graphics_.stereoDisplayMode()) {
+    case StereoDisplayMode::SplitAxes:
+      graphics_.setStereoDisplayMode(StereoDisplayMode::OverlayLeftForeground);
+      break;
+    case StereoDisplayMode::OverlayLeftForeground:
+      graphics_.setStereoDisplayMode(StereoDisplayMode::OverlayRightForeground);
+      break;
+    case StereoDisplayMode::OverlayRightForeground:
+      graphics_.setStereoDisplayMode(StereoDisplayMode::SplitAxes);
+      break;
+  }
   invalidateStaticLayer();
   update();
 }
@@ -1255,7 +1265,7 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
                             cachedViewLen_ != viewLen_ ||
                             std::fabs(cachedYMin_ - yMin_) > 1e-12 ||
                             std::fabs(cachedYMax_ - yMax_) > 1e-12 ||
-                            cachedStereoOverlay_ != graphics_.stereoOverlay() ||
+                            cachedStereoDisplayMode_ != graphics_.stereoDisplayMode() ||
                             cachedWorkspaceActive_ != workspaceActive_ ||
                             staticPlotRect_ != plot;
   if (!needsRebuild) {
@@ -1414,7 +1424,7 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
   cachedViewLen_ = viewLen_;
   cachedYMin_ = yMin_;
   cachedYMax_ = yMax_;
-  cachedStereoOverlay_ = graphics_.stereoOverlay();
+  cachedStereoDisplayMode_ = graphics_.stereoDisplayMode();
   cachedWorkspaceActive_ = workspaceActive_;
 }
 

@@ -66,6 +66,9 @@ constexpr int kHistoryCommandRole = Qt::UserRole + 1;
 constexpr int kHistoryCountRole = Qt::UserRole + 2;
 constexpr int kHistoryIsCommentRole = Qt::UserRole + 3;
 constexpr uint16_t kDisplayTypebitHandle = 0x4000;
+constexpr int kDefaultAsyncCapturePollMs = 300;
+constexpr int kMinAsyncCapturePollMs = 5;
+constexpr int kMaxAsyncCapturePollMs = 5000;
 }
 
 class AudioCaptureSink final : public QIODevice {
@@ -825,7 +828,7 @@ MainWindow::MainWindow() {
   refreshVariables();
   refreshDebugView();
   asyncPollTimer_ = new QTimer(this);
-  asyncPollTimer_->setInterval(300);
+  asyncPollTimer_->setInterval(asyncCapturePollMs_);
   connect(asyncPollTimer_, &QTimer::timeout, this, &MainWindow::onAsyncPollTick);
   asyncPollTimer_->start();
   statusBar()->showMessage(
@@ -1656,6 +1659,11 @@ void MainWindow::saveRecentUdfFiles() const {
 
 void MainWindow::loadPersistedRuntimeSettings() {
   QSettings settings("auxlab2", "auxlab2");
+  asyncCapturePollMs_ = std::clamp(settings.value("runtime_settings/async_capture_poll_ms",
+                                                  kDefaultAsyncCapturePollMs)
+                                       .toInt(),
+                                   kMinAsyncCapturePollMs,
+                                   kMaxAsyncCapturePollMs);
   if (!settings.contains("runtime_settings/sample_rate")) {
     return;
   }
@@ -1690,6 +1698,7 @@ void MainWindow::savePersistedRuntimeSettings() const {
   settings.setValue("runtime_settings/display_limit_y", cfg.displayLimitY);
   settings.setValue("runtime_settings/display_limit_bytes", cfg.displayLimitBytes);
   settings.setValue("runtime_settings/display_limit_str", cfg.displayLimitStr);
+  settings.setValue("runtime_settings/async_capture_poll_ms", asyncCapturePollMs_);
 
   QStringList paths;
   for (const std::string& p : cfg.udfPaths) {
@@ -5475,6 +5484,13 @@ void MainWindow::showSettingsDialog() {
   precisionSpin->setRange(0, 20);
   precisionSpin->setValue(std::max(0, cfg.displayPrecision));
 
+  auto* asyncCapturePollSpin = new QSpinBox(&dialog);
+  asyncCapturePollSpin->setRange(kMinAsyncCapturePollMs, kMaxAsyncCapturePollMs);
+  asyncCapturePollSpin->setSuffix(" ms");
+  asyncCapturePollSpin->setValue(std::clamp(asyncCapturePollMs_,
+                                            kMinAsyncCapturePollMs,
+                                            kMaxAsyncCapturePollMs));
+
   auto* udfPathsEdit = new QPlainTextEdit(&dialog);
   QStringList pathLines;
   for (const std::string& p : cfg.udfPaths) {
@@ -5489,6 +5505,7 @@ void MainWindow::showSettingsDialog() {
   form->addRow("Display Limit Bytes", limitBytesSpin);
   form->addRow("Display Limit String", limitStrSpin);
   form->addRow("Display Precision", precisionSpin);
+  form->addRow("Callback Capture Poll", asyncCapturePollSpin);
   form->addRow("UDF Paths (one per line)", udfPathsEdit);
   layout->addLayout(form);
 
@@ -5502,6 +5519,7 @@ void MainWindow::showSettingsDialog() {
   }
 
   RuntimeSettingsSnapshot next = cfg;
+  const int nextAsyncCapturePollMs = asyncCapturePollSpin->value();
   next.sampleRate = sampleRateSpin->value();
   next.displayLimitX = limitXSpin->value();
   next.displayLimitY = limitYSpin->value();
@@ -5527,6 +5545,10 @@ void MainWindow::showSettingsDialog() {
     return;
   }
 
+  asyncCapturePollMs_ = nextAsyncCapturePollMs;
+  if (asyncPollTimer_) {
+    asyncPollTimer_->setInterval(asyncCapturePollMs_);
+  }
   savePersistedRuntimeSettings();
   statusBar()->showMessage("Runtime settings updated.", 2500);
 }
