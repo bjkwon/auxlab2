@@ -38,6 +38,7 @@ macOS:
 
 - Primary: signed `.dmg` via CPack `DragNDrop`
 - Contents: `auxlab2.app` with bundled frameworks/plugins
+- Repeatable helper: [`scripts/release_macos.sh`](/Users/bkwon/dev/auxlab2/scripts/release_macos.sh:1)
 
 Linux:
 
@@ -163,6 +164,52 @@ cmake -S C:\Users\you\dev\auxlab2 -B C:\Users\you\dev\auxlab2\build-release `
 - Qt 6 for macOS
 - Apple Developer ID Application certificate
 - Apple notarization credentials
+- Homebrew install of `cmake`, `qt`, `fftw`, `libsamplerate`, `nlohmann-json`
+
+### One-command release
+
+Set the signing identity once in your shell:
+
+```bash
+export AUXLAB_CERT="Developer ID Application: Your Name (TEAMID)"
+```
+
+If you stored notarization credentials under a different profile name than `auxlab2-notary`, set that too:
+
+```bash
+export KEYCHAIN_PROFILE="your-notary-profile"
+```
+
+Then run:
+
+```bash
+/Users/bkwon/dev/auxlab2/scripts/release_macos.sh
+```
+
+The script will:
+
+1. Configure and build `Release`.
+2. Install into `/tmp/auxlab2-stage`.
+3. Sign nested binaries and the final app bundle with hardened runtime and timestamping.
+4. Create a DMG named like `auxlab2-<version>-macos-arm64.dmg`.
+5. Sign, notarize, staple, and validate the DMG.
+
+Default paths and knobs:
+
+- `BUILD_DIR` defaults to `/Users/bkwon/dev/auxlab2/build-release`
+- `STAGE_DIR` defaults to `/tmp/auxlab2-stage`
+- `DMG_STAGE_DIR` defaults to `/tmp/auxlab2-dmg`
+- `KEYCHAIN_PROFILE` defaults to `auxlab2-notary`
+- `DMG_BASENAME` defaults to `auxlab2-<version>-macos-arm64`
+
+Example with explicit overrides:
+
+```bash
+AUXLAB_CERT="Developer ID Application: Your Name (TEAMID)" \
+KEYCHAIN_PROFILE="auxlab2-notary" \
+DMG_BASENAME="auxlab2-0.9.4-macos-arm64" \
+/Users/bkwon/dev/auxlab2/scripts/release_macos.sh
+```
 
 ### What the package must contain
 
@@ -176,24 +223,40 @@ cmake -S C:\Users\you\dev\auxlab2 -B C:\Users\you\dev\auxlab2\build-release `
 ### Flow
 
 1. Generate or refresh the `.icns` if needed with [`scripts/make_icns.sh`](/Users/bkwon/dev/auxlab2/scripts/make_icns.sh:1).
-2. Build `Release`.
-3. Run `package` to produce the `.dmg`.
-4. Inspect the staged `.app` with:
+2. Confirm `security find-identity -v -p codesigning` shows the `Developer ID Application` identity you plan to use.
+3. Confirm notarization credentials are already stored with `xcrun notarytool store-credentials`.
+4. Run [`scripts/release_macos.sh`](/Users/bkwon/dev/auxlab2/scripts/release_macos.sh:1).
+5. Re-test the signed artifact on a clean macOS machine with Gatekeeper enabled.
+
+### Manual fallback
+
+If you need to debug a failed release interactively, the manual sequence is:
+
+1. Configure and build `Release`.
+2. Install to `/tmp/auxlab2-stage`.
+3. Sign all nested code in `Contents/MacOS`, `Contents/Frameworks`, and `Contents/PlugIns`.
+4. Sign the top-level `auxlab2.app`.
+5. Create a DMG from a folder containing `auxlab2.app` plus an `Applications` symlink.
+6. Sign the DMG.
+7. Submit the DMG to notarization.
+8. Staple the accepted notarization ticket.
+
+Useful validation commands while debugging:
 
 ```bash
 codesign --verify --deep --strict /tmp/auxlab2-stage/auxlab2.app
-spctl --assess --type execute /tmp/auxlab2-stage/auxlab2.app
+spctl --assess --type execute --verbose=4 /tmp/auxlab2-stage/auxlab2.app
+codesign -dv --verbose=4 /tmp/auxlab2-stage/auxlab2.app/Contents/MacOS/auxlab2-0.9.4
+spctl --assess --type open --verbose=4 /Users/bkwon/dev/auxlab2/build-release/auxlab2-0.9.4-macos-arm64.dmg
 ```
-
-5. Sign the app bundle.
-6. Notarize the `.dmg`.
-7. Staple notarization tickets.
-8. Re-test on a clean macOS machine with Gatekeeper enabled.
 
 ### Notes
 
 - The CMake deployment hook should handle the Qt side when the Qt deployment helper is available.
 - If the release machine’s Qt package does not expose that helper, run `macdeployqt` as a fallback.
+- `spctl` will usually report `source=Unnotarized Developer ID` after a correct app signature but before a successful notarization. That is expected.
+- The app bundle contains both `Contents/MacOS/auxlab2` and `Contents/MacOS/auxlab2-<version>`. Both must carry a proper Developer ID signature with timestamp and hardened runtime for notarization to pass.
+- The current helper script produces an Apple Silicon artifact. If Intel support is needed, build a universal binary or a separate x86_64 release.
 
 ## Linux Release Plan
 
