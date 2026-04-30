@@ -448,8 +448,9 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
   if (selStart_ >= 0 && selEnd_ >= 0 && selStart_ != selEnd_) {
     const int s = std::min(selStart_, selEnd_);
     const int e = std::max(selStart_, selEnd_);
-    int x1 = sampleToX(plot, s);
-    int x2 = sampleToX(plot, e);
+    const QRect selectionRect = selectionReferenceRect();
+    int x1 = sampleToX(selectionRect, s);
+    int x2 = sampleToX(selectionRect, e);
     p.fillRect(QRect(std::min(x1, x2), plot.top(), std::abs(x2 - x1), plot.height()), QColor(72, 120, 72, 110));
   }
 
@@ -1139,12 +1140,22 @@ void SignalGraphWindow::handlePlaybackAfterRangeChange() {
 }
 
 int SignalGraphWindow::xToSample(const QPoint& pt) const {
-  QRect plot = plotRect();
-  const int width = std::max(1, plot.width());
-  const double t = (pt.x() - plot.left()) / static_cast<double>(width);
+  const QRect ref = selectionReferenceRect();
+  const int width = std::max(1, ref.width());
+  const double t = (pt.x() - ref.left()) / static_cast<double>(width);
   const double clamped = std::clamp(t, 0.0, 1.0);
   const int span = std::max(0, viewLen_ - 1);
   return viewStart_ + static_cast<int>(std::llround(clamped * span));
+}
+
+QRect SignalGraphWindow::selectionReferenceRect() const {
+  const QRect plot = plotRect();
+  const auto* axes = graphics_.leftChannelAxes();
+  if (!axes || !axes->common.visible) {
+    return plot;
+  }
+  const QRect axesRect = axesRectForPlot(*axes, plot);
+  return axesRect.isValid() ? axesRect : plot;
 }
 
 void SignalGraphWindow::updatePlayhead() {

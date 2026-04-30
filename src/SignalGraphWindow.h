@@ -102,6 +102,7 @@ private:
   int currentPlaybackSample() const;
   void handlePlaybackAfterRangeChange();
   int xToSample(const QPoint& pt) const;
+  QRect selectionReferenceRect() const;
   void updatePlayhead();
   void updateYRange();
   void syncVisibleXRangeToAxes();
