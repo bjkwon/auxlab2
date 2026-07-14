@@ -29,6 +29,7 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
     return std::nullopt;
   }
 
+  constexpr uint16_t kTypeComplex = 0x0060;
   const int channels = aux_num_channels(obj);
   if (channels <= 0) {
     return std::nullopt;
@@ -37,10 +38,12 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
   struct SegmentCopy {
     int startSample = 0;
     std::vector<double> samples;
+    std::vector<double> imagSamples;
   };
 
   SignalData data;
   data.isAudio = aux_is_audio(obj);
+  data.isComplex = (aux_type(obj) & kTypeComplex) == kTypeComplex;
   data.sampleRate = 0;
 
   double minStartMs = std::numeric_limits<double>::infinity();
@@ -60,8 +63,16 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
 
       SegmentCopy copy;
       copy.samples.resize(seg.nSamples);
-      if (seg.buf && seg.nSamples > 0) {
-        std::copy(seg.buf, seg.buf + seg.nSamples, copy.samples.begin());
+      if (seg.nSamples > 0) {
+        if (data.isComplex && seg.cbuf) {
+          copy.imagSamples.resize(seg.nSamples);
+          for (uint64_t i = 0; i < seg.nSamples; ++i) {
+            copy.samples[static_cast<size_t>(i)] = seg.cbuf[i].real();
+            copy.imagSamples[static_cast<size_t>(i)] = seg.cbuf[i].imag();
+          }
+        } else if (seg.buf) {
+          std::copy(seg.buf, seg.buf + seg.nSamples, copy.samples.begin());
+        }
       }
       byChannel[static_cast<size_t>(ch)].push_back(std::move(copy));
     }
@@ -96,6 +107,9 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
   for (int ch = 0; ch < channels; ++ch) {
     ChannelData channel;
     channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+    if (data.isComplex) {
+      channel.imagSamples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+    }
     for (const auto& seg : byChannel[static_cast<size_t>(ch)]) {
       if (seg.samples.empty()) {
         continue;
@@ -106,6 +120,9 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
       }
       const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
       std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
+      if (data.isComplex && !seg.imagSamples.empty()) {
+        std::copy_n(seg.imagSamples.begin(), count, channel.imagSamples.begin() + static_cast<qsizetype>(start));
+      }
       channel.segments.push_back({static_cast<int>(start), static_cast<int>(count)});
     }
     std::sort(channel.segments.begin(), channel.segments.end(), [](const SignalSegment& lhs, const SignalSegment& rhs) {
@@ -123,6 +140,7 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
 namespace {
 constexpr uint16_t kTypeString = 0x0030;
 constexpr uint16_t kTypeByte = 0x0050;
+constexpr uint16_t kTypeComplex = 0x0060;
 constexpr uint16_t kTypeCell = 0x1000;
 constexpr uint16_t kTypeStrut = 0x2000;
 constexpr uint16_t kTypeHandle = 0x4000;
@@ -185,6 +203,7 @@ std::string structFaceOnlyPreview(const std::string& preview) {
 }
 
 std::string shortTypeTag(uint16_t type) {
+  const bool isComplex = (type & kTypeComplex) == kTypeComplex;
   if ((type & kTypeCell) != 0) {
     return "CELL";
   }
@@ -203,10 +222,10 @@ std::string shortTypeTag(uint16_t type) {
 
   const uint16_t shape = type & 0x000F;
   if (shape == 1) {
-    return "SCLR";
+    return isComplex ? "SCLR-C" : "SCLR";
   }
   if (shape == 2 || shape == 3) {
-    return "VECT";
+    return isComplex ? "VECT-C" : "VECT";
   }
   return "";
 }
@@ -1275,12 +1294,19 @@ bool AuxEngineFacade::hasDebugPauseInfo(auxDebugInfo& out) const {
   return true;
 }
 
-auxDebugAction AuxEngineFacade::debugResume(auxDebugAction action) {
+auxDebugAction AuxEngineFacade::debugResume(auxDebugAction action, std::string* output) {
   if (!rootCtx_) {
+    if (output) {
+      *output = "AUX engine is not initialized.";
+    }
     return auxDebugAction::AUX_DEBUG_NO_DEBUG;
   }
 
   const auto r = aux_debug_resume(&activeCtx_, action);
+  if (output) {
+    const char* statusMsg = aux_get_status_message(activeCtx_);
+    *output = statusMsg ? statusMsg : "";
+  }
 
   auxDebugInfo info{};
   if (aux_debug_get_pause_info(activeCtx_, info) == 0) {

@@ -30,11 +30,13 @@ struct SignalSegment {
 
 struct ChannelData {
   std::vector<double> samples;
+  std::vector<double> imagSamples;
   std::vector<SignalSegment> segments;
 };
 
 struct SignalData {
   bool isAudio = false;
+  bool isComplex = false;
   int sampleRate = 0;
   double startTimeSec = 0.0;
   std::vector<ChannelData> channels;
@@ -103,7 +105,7 @@ public:
   bool applyRuntimeSettings(const RuntimeSettingsSnapshot& settings, std::string& err);
 
   bool hasDebugPauseInfo(auxDebugInfo& out) const;
-  auxDebugAction debugResume(auxDebugAction action);
+  auxDebugAction debugResume(auxDebugAction action, std::string* output = nullptr);
 
 private:
   auxConfig cfg_{};

@@ -192,6 +192,39 @@ std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
   return values;
 }
 
+SignalData graphSignalDataForDisplay(const SignalData& data) {
+  if (data.isAudio) {
+    return data;
+  }
+
+  const bool hasImaginaryComponent = std::any_of(
+      data.channels.begin(), data.channels.end(), [](const ChannelData& channel) {
+        return !channel.imagSamples.empty() && channel.imagSamples.size() == channel.samples.size();
+      });
+  if (!hasImaginaryComponent) {
+    return data;
+  }
+
+  SignalData graphData = data;
+  graphData.isComplex = false;
+  graphData.channels.clear();
+  graphData.channels.reserve(data.channels.size() * 2);
+
+  for (const auto& channel : data.channels) {
+    ChannelData realChannel;
+    realChannel.samples = channel.samples;
+    realChannel.segments = channel.segments;
+    graphData.channels.push_back(std::move(realChannel));
+
+    ChannelData imagChannel;
+    imagChannel.samples = channel.imagSamples;
+    imagChannel.segments = channel.segments;
+    graphData.channels.push_back(std::move(imagChannel));
+  }
+
+  return graphData;
+}
+
 QByteArray buildAudioPcm16(const SignalData& sig, int& outChannelCount, int& outTotalFrames) {
   outChannelCount = std::min<int>(2, static_cast<int>(sig.channels.size()));
   const int dataFrames = sig.channels.empty() ? 0 : static_cast<int>(sig.channels.front().samples.size());
@@ -960,9 +993,10 @@ std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
   }
 
   if (!targetWindow) {
-    targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), *sig, false, QString(), false);
+    targetWindow = createSignalFigureWindow(
+        graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(*sig), false, QString(), false);
   } else {
-    targetWindow->updateData(*sig);
+    targetWindow->updateData(graphSignalDataForDisplay(*sig));
     focusWindow(targetWindow);
     graphicsManager_.markFocused(targetWindow);
   }
@@ -1526,7 +1560,7 @@ void MainWindow::connectSignals() {
     if (auto* box = item->treeWidget()) {
       box->setCurrentItem(item);
     }
-    openPathDetail(item->text(0));
+    openPathDetailDeferred(item->text(0));
   };
   connect(audioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
   connect(nonAudioVariableBox_, &QTreeWidget::itemDoubleClicked, this, variableDoubleClick);
@@ -1618,7 +1652,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         focusSignalGraphForSelected();
       } else if (watched == nonAudioVariableBox_) {
         auto* item = nonAudioVariableBox_->currentItem();
-        if (item && item->text(1) == "VECT") {
+        const QString typeTag = item ? item->text(1) : QString();
+        if (item && (typeTag == "VECT" || typeTag.endsWith("-C"))) {
           focusSignalGraphForSelected();
         }
       }
@@ -2822,9 +2857,10 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
 
     if (!targetWindow) {
-      targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), *sig, false, QString(), false);
+      targetWindow = createSignalFigureWindow(
+          graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(*sig), false, QString(), false);
     } else {
-      targetWindow->updateData(*sig);
+      targetWindow->updateData(graphSignalDataForDisplay(*sig));
       focusWindow(targetWindow);
       graphicsManager_.markFocused(targetWindow);
     }
@@ -3849,15 +3885,9 @@ void MainWindow::focusSignalGraphForSelected() {
   if (var.isEmpty()) {
     return;
   }
-
-  if (auto* existing = findSignalGraphWindow(var, engine_.activeContext())) {
-    focusWindow(existing);
-    graphicsManager_.markFocused(existing);
-    return;
-  }
-
-  // Enter key behavior: open on first use, focus on subsequent presses.
-  openSignalGraphForSelected();
+  // Refresh the graph data on repeated Enter presses so existing variable
+  // windows pick up changes such as complex real/imag remapping.
+  openSignalGraphForPath(var);
 }
 
 void MainWindow::openSignalTableForSelected() {
@@ -3878,10 +3908,11 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
   if (!sig) {
     return;
   }
+  SignalData graphData = graphSignalDataForDisplay(*sig);
 
   const auto currentScope = engine_.activeContext();
   if (auto* existing = findSignalGraphWindow(path, currentScope)) {
-    existing->updateData(*sig);
+    existing->updateData(graphData);
     focusWindow(existing);
     graphicsManager_.markFocused(existing);
     return;
@@ -3893,7 +3924,7 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
   options.sourcePath = path;
 
   auto* w = new SignalGraphWindow(
-      path, *sig, options, nullptr,
+      path, graphData, options, nullptr,
       [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Graph);
@@ -4009,6 +4040,14 @@ void MainWindow::openPathDetail(const QString& path) {
   w->show();
 }
 
+void MainWindow::openPathDetailDeferred(const QString& path) {
+  if (path.isEmpty()) {
+    return;
+  }
+  const QString stablePath = path;
+  QTimer::singleShot(0, this, [this, stablePath]() { openPathDetail(stablePath); });
+}
+
 bool MainWindow::openGraphicsPathDetail(const QString& path) {
   if (path.isEmpty()) {
     return false;
@@ -4029,7 +4068,7 @@ bool MainWindow::openGraphicsPathDetail(const QString& path) {
       w->setAttribute(Qt::WA_DeleteOnClose, true);
       connect(w, &StructMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
       connect(w, &StructMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
-      connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+      connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetailDeferred);
       trackWindow(path, w, WindowKind::Text);
       w->show();
       return true;
@@ -4039,7 +4078,7 @@ bool MainWindow::openGraphicsPathDetail(const QString& path) {
     w->setAttribute(Qt::WA_DeleteOnClose, true);
     connect(w, &CellMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
     connect(w, &CellMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
-    connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+    connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetailDeferred);
     trackWindow(path, w, WindowKind::Text);
     w->show();
     return true;
@@ -4967,7 +5006,7 @@ void MainWindow::openStructMembersForPath(const QString& path) {
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   connect(w, &StructMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
   connect(w, &StructMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
-  connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+  connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetailDeferred);
   trackWindow(path, w, WindowKind::Text);
   w->show();
 }
@@ -4986,7 +5025,7 @@ void MainWindow::openCellMembersForPath(const QString& path) {
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   connect(w, &CellMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
   connect(w, &CellMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
-  connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetail);
+  connect(w, &CellMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetailDeferred);
   trackWindow(path, w, WindowKind::Text);
   w->show();
 }
@@ -5444,7 +5483,7 @@ void MainWindow::reconcileScopedWindows() {
       if (it->scope == currentScope) {
         auto sig = engine_.getSignalData(it->varName.toStdString());
         if (sig) {
-          g->updateData(*sig);
+          g->updateData(graphSignalDataForDisplay(*sig));
         }
       }
     } else {
@@ -5606,7 +5645,11 @@ bool MainWindow::variableIsCell(const QString& varName) const {
 
 void MainWindow::handleDebugAction(auxDebugAction action) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
-  engine_.debugResume(action);
+  std::string output;
+  engine_.debugResume(action, &output);
+  if (!output.empty()) {
+    appendConsoleMessage(QString::fromStdString(output).trimmed());
+  }
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();

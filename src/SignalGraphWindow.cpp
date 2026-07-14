@@ -933,6 +933,7 @@ void SignalGraphWindow::cycleStereoMode() {
       graphics_.setStereoDisplayMode(StereoDisplayMode::SplitAxes);
       break;
   }
+  updateYRange();
   invalidateStaticLayer();
   update();
 }
@@ -1178,14 +1179,24 @@ void SignalGraphWindow::syncFigurePosFromWidget() {
 }
 
 void SignalGraphWindow::updateYRange() {
+  const auto applyAutoYLimToAllAxes = [this](const std::array<double, 2>& ylim) {
+    for (const auto& axesConst : graphics_.axes()) {
+      if (auto* axes = graphics_.axesByIdMutable(axesConst.common.id); axes && axes->autoYLim) {
+        axes->ylim = ylim;
+      }
+    }
+  };
+
   if (data_.isAudio) {
     if (data_.channels.empty() || data_.channels.front().samples.empty()) {
       yMin_ = -1.0;
       yMax_ = 1.0;
+      applyAutoYLimToAllAxes({-1.0, 1.0});
       return;
     }
     yMin_ = -1.0;
     yMax_ = 1.0;
+    applyAutoYLimToAllAxes({-1.0, 1.0});
     return;
   }
 
@@ -1209,11 +1220,48 @@ void SignalGraphWindow::updateYRange() {
   if (!any) {
     yMin_ = -1.0;
     yMax_ = 1.0;
-    return;
-  }
-  if (std::fabs(yMax_ - yMin_) < 1e-12) {
+  } else if (std::fabs(yMax_ - yMin_) < 1e-12) {
     yMin_ -= 1.0;
     yMax_ += 1.0;
+  }
+
+  for (const auto& axesConst : graphics_.axes()) {
+    auto* axes = graphics_.axesByIdMutable(axesConst.common.id);
+    if (!axes || !axes->autoYLim) {
+      continue;
+    }
+
+    double axesYMin = std::numeric_limits<double>::max();
+    double axesYMax = std::numeric_limits<double>::lowest();
+    bool axesAny = false;
+    const auto lines = graphics_.linesForAxes(axes->common.id);
+    for (const auto* line : lines) {
+      if (!line || line->ydata.isEmpty()) {
+        continue;
+      }
+      const int totalLen = line->ydata.size();
+      const int from = std::clamp(viewStart_, 0, std::max(0, totalLen - 1));
+      const int end = std::clamp(viewStart_ + viewLen_, from + 1, totalLen);
+      for (int i = from; i < end; ++i) {
+        const double v = line->ydata[i];
+        if (!std::isfinite(v)) {
+          continue;
+        }
+        axesYMin = std::min(axesYMin, v);
+        axesYMax = std::max(axesYMax, v);
+        axesAny = true;
+      }
+    }
+
+    if (!axesAny) {
+      axes->ylim = {-1.0, 1.0};
+      continue;
+    }
+    if (std::fabs(axesYMax - axesYMin) < 1e-12) {
+      axesYMin -= 1.0;
+      axesYMax += 1.0;
+    }
+    axes->ylim = {axesYMin, axesYMax};
   }
 }
 

@@ -57,24 +57,51 @@ void SignalTableWindow::fillTable(const SignalData& data) {
   }
 
   const int maxRows = static_cast<int>(std::min<size_t>(maxLen, 5000));
-  table_->setColumnCount(channels + 1);
+  const bool complexData = data.isComplex;
+  const int dataColumns = complexData ? 2 : channels;
+  table_->setColumnCount(dataColumns + 1);
   table_->setRowCount(maxRows);
 
   QStringList headers;
   headers << "Index";
-  for (int c = 0; c < channels; ++c) {
-    headers << QString("Ch%1").arg(c + 1);
+  if (complexData) {
+    headers << "Real" << "Imaginary";
+  } else {
+    for (int c = 0; c < channels; ++c) {
+      headers << QString("Ch%1").arg(c + 1);
+    }
   }
   table_->setHorizontalHeaderLabels(headers);
 
   for (int r = 0; r < maxRows; ++r) {
-    table_->setItem(r, 0, new QTableWidgetItem(QString::number(r)));
-    for (int c = 0; c < channels; ++c) {
-      QString text;
-      if (static_cast<size_t>(r) < data.channels[static_cast<size_t>(c)].samples.size()) {
-        text = QString::number(data.channels[static_cast<size_t>(c)].samples[static_cast<size_t>(r)], 'g', 8);
+    auto* indexItem = new QTableWidgetItem(QString::number(r));
+    indexItem->setTextAlignment(Qt::AlignCenter);
+    table_->setItem(r, 0, indexItem);
+    if (complexData) {
+      QString realText;
+      QString imagText;
+      if (static_cast<size_t>(r) < data.channels[0].samples.size()) {
+        realText = QString::number(data.channels[0].samples[static_cast<size_t>(r)], 'g', 8);
       }
-      table_->setItem(r, c + 1, new QTableWidgetItem(text));
+      if (static_cast<size_t>(r) < data.channels[0].imagSamples.size()) {
+        imagText = QString::number(data.channels[0].imagSamples[static_cast<size_t>(r)], 'g', 8);
+      }
+      auto* realItem = new QTableWidgetItem(realText);
+      realItem->setTextAlignment(Qt::AlignCenter);
+      auto* imagItem = new QTableWidgetItem(imagText);
+      imagItem->setTextAlignment(Qt::AlignCenter);
+      table_->setItem(r, 1, realItem);
+      table_->setItem(r, 2, imagItem);
+    } else {
+      for (int c = 0; c < channels; ++c) {
+        QString text;
+        if (static_cast<size_t>(r) < data.channels[static_cast<size_t>(c)].samples.size()) {
+          text = QString::number(data.channels[static_cast<size_t>(c)].samples[static_cast<size_t>(r)], 'g', 8);
+        }
+        auto* item = new QTableWidgetItem(text);
+        item->setTextAlignment(Qt::AlignCenter);
+        table_->setItem(r, c + 1, item);
+      }
     }
   }
 }

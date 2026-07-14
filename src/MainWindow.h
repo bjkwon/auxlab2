@@ -130,6 +130,7 @@ private:
                                              bool variableBacked);
   bool openGraphicsPathDetail(const QString& path);
   void openPathDetail(const QString& path);
+  void openPathDetailDeferred(const QString& path);
   void playAudioForPath(const QString& path);
   void openStructMembersForPath(const QString& path);
   void openCellMembersForPath(const QString& path);
