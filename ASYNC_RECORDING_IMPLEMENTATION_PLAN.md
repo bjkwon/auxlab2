@@ -1,5 +1,32 @@
 # Async Recording Callback Implementation Plan
 
+## Current Implementation Status
+
+Status: implemented through the record-callback MVP and basic handle controls.
+
+The current source tree now has working `record(...).cbname` support using the preferred explicit engine callback bridge. The implementation is no longer only a plan:
+
+- auxe parses callback-suffix recording calls.
+- auxe creates `audio_record` runtime handles for callback recording.
+- auxe exposes async recording backend hooks in `auxPlaybackBackend`.
+- auxlab2 installs those hooks and owns Qt recording sessions.
+- auxlab2 captures audio with `QAudioSource`, converts it into AUX callback blocks, and delivers callback work on the main Qt thread.
+- auxe invokes the callback UDF through `aux_invoke_record_callback(...)`.
+- callback state persists per recording session.
+- callback outputs can be attached back onto the recording handle.
+- `stop(h)`, `pause(h)`, and `resume(h)` dispatch to recording handles.
+- `aux_engine/test/regression_record_callback.cpp` covers the engine callback bridge and persistent callback state.
+
+The main remaining work is hardening and design cleanup rather than first implementation:
+
+- verify more real-device cases, especially stereo and device-format edge cases
+- decide final-partial-block behavior on stop/close
+- decide whether to add string handle members such as device name
+- reduce or remove auxlab2 command-string repair logic around `h = record(...).cbname`
+- use this implementation as the reference design before adding callback support to `play()`
+
+See also `RECORD_CALLBACK_UDF_SUPPORT.md` for a compact explanation of the current implementation and its implications for `play()`.
+
 ## Goal
 
 Add legacy-style asynchronous recording to auxlab2 while preserving the current synchronous `record()` API.
@@ -18,7 +45,9 @@ The current synchronous behavior should remain available:
 
 The new async behavior should be enabled by callback syntax, matching legacy AUXLAB intent:
 
-- `record(...).cbname(...)`
+- `record(...).cbname`
+
+The current implementation supports the callback UDF name suffix. Extra callback arguments in `.cbname(...)` are not part of the implemented MVP.
 
 ## Legacy Behavior Summary
 
@@ -58,13 +87,18 @@ These continue to return an audio object.
 
 - `h = record.cbname`
 - `h = record(deviceId, durationMs, channels, blockMs).cbname`
-- `h = record(recorderStruct).cbname`
 
 Where:
 
 - `h` is an audio recording handle
 - `cbname` is the callback UDF
 - `blockMs` is the callback block size in milliseconds
+
+Current implementation note:
+
+- scalar positional arguments are implemented
+- `durationMs == -1` is accepted for indefinite callback recording
+- `record(recorderStruct).cbname` remains a possible future convenience form, not current behavior
 
 ### Control forms
 
@@ -261,22 +295,28 @@ Preferred long-term representation:
 
 Avoid relying on raw command-string reconstruction in the frontend as the long-term design.
 
+Current implementation note:
+
+- the backend receives `auxAsyncRecordSpec`, including `callback_name`
+- extra bound callback arguments are not implemented
+- auxlab2 still has command-level repair logic after `engine_.eval(...)` to normalize assignment and echo behavior for `h = record(...).cbname`
+
 ## Engine API Changes
 
 ### Backend interface changes
 
 Extend the playback/recording backend in `auxe.h` with separate async recording hooks.
 
-Suggested additions:
+Implemented additions:
 
-- `record_sync`
-  - keep current finite synchronous recording behavior
+- `record`
+  - keeps current finite synchronous recording behavior
 - `record_async_start`
   - starts an async recording session
 - `record_async_control`
   - controls async recording session using stop/pause/resume
 
-Suggested control enum:
+Implemented control enum:
 
 - `AUX_RECORD_STOP`
 - `AUX_RECORD_PAUSE`
@@ -298,6 +338,8 @@ For async mode:
 - call `record_async_start`
 - return the handle immediately
 
+Status: implemented in `aux_engine/src/func/record_builtin.cpp`.
+
 ### Handle detection helpers
 
 Add helpers similar to playback:
@@ -305,6 +347,8 @@ Add helpers similar to playback:
 - `is_recording_handle(const CVar&)`
 - `set_recording_handle_result(...)`
 - `next_recording_handle_id()`
+
+Status: implemented with recording-handle detection/control support split between `record_builtin.cpp` and `play_builtin.cpp`.
 
 ### `stop/pause/resume`
 
@@ -314,6 +358,8 @@ Extend `play_builtin.cpp` or split control builtins so they accept either:
 - recording handle
 
 Dispatch based on `type` or recording-handle shape.
+
+Status: implemented in `aux_engine/src/func/play_builtin.cpp`.
 
 ## Frontend Backend Hooks
 
@@ -480,34 +526,44 @@ Recommendation:
 - implement MVP with a minimal explicit engine callback bridge
 - avoid committing to string-eval as the permanent architecture
 
+Status: Option B was implemented.
+
 ## Proposed Engine Callback Bridge
 
-Add an API that lets the frontend request:
+The implementation adds a record-specific API that lets the frontend request:
 
 - invoke callback UDF `name`
 - provide implicit input struct fields:
   - `?data`
   - `?index`
-- provide any extra bound callback args
+- provide callback session identity and payload metadata
 
-Possible API shape:
+Implemented API shape:
 
-- `aux_invoke_callback(...)`
+- `aux_invoke_record_callback(...)`
+- `aux_attach_record_callback_outputs_to_handle(...)`
 
 Inputs:
 
-- context
-- callback descriptor
-- audio block object
-- callback index
-- extra args
+- active context pointer
+- recording session id
+- callback UDF name
+- `auxRecordCallbackPayload`
+- runtime config/search paths
 
 Outputs:
 
 - success/failure
-- error string
+- preview or error string
 
 This API should execute only on the main app thread.
+
+Current implementation note:
+
+- callback input also includes `?fs`
+- callback output state persists per session id
+- callback debug pause can update the active aux context through the facade
+- extra callback arguments are not implemented
 
 ## Error Handling Rules
 
@@ -557,39 +613,41 @@ Do not make recording callback delivery depend on `pollAsync()` unless the engin
 
 #### `include/auxe/auxe.h`
 
-- add async recording backend function pointers
-- add recording control enum
-- add callback descriptor types if needed
+- implemented: async recording backend function pointers
+- implemented: recording control enum
+- implemented: record callback payload type
+- not implemented: general callback descriptor type with extra bound callback args
 
 #### `src/engine/builtin_functions.h`
 
-- add any new declarations needed for async record helpers
+- no major remaining work identified for the current MVP
 
 #### `src/engine/AuxFunc.cpp`
 
-- register any new builtins or updated builtin behavior
+- no major remaining work identified for the current MVP
 
 #### `src/func/record_builtin.cpp`
 
-- split sync and async record paths
-- detect callback-suffix usage
-- create runtime recording handle for async path
-- start async recording through backend hook
+- implemented: split sync and async record paths
+- implemented: detect callback-suffix usage
+- implemented: create runtime recording handle for async path
+- implemented: start async recording through backend hook
 
 #### `src/func/play_builtin.cpp`
 
-- extend `stop/pause/resume` dispatch to recording handles
-- or split control builtin implementation cleanly
+- implemented: extend `stop/pause/resume` dispatch to recording handles
 
 #### `src/api/interface.cpp`
 
-- add callback invocation API if implementing explicit engine bridge
+- implemented: `aux_invoke_record_callback(...)`
+- implemented: `aux_attach_record_callback_outputs_to_handle(...)`
+- remaining: consider whether a generalized callback bridge is needed before implementing play callbacks
 
 ### auxlab2
 
 #### `src/MainWindow.h`
 
-- declare:
+- implemented declarations include:
   - `startAsyncRecord(...)`
   - `controlAsyncRecord(...)`
   - callback delivery helpers
@@ -597,19 +655,21 @@ Do not make recording callback delivery depend on `pollAsync()` unless the engin
 
 #### `src/MainWindow.cpp`
 
-- add `RecordingSession` storage
-- implement Qt recording session lifecycle
-- implement block accumulation and delivery
-- update runtime handle members
-- surface errors and cleanup
+- implemented: `RecordingSession` storage
+- implemented: Qt recording session lifecycle
+- implemented: block accumulation and delivery
+- implemented: runtime handle member updates
+- implemented: error surfacing and cleanup paths
+- remaining: broader manual verification against real hardware/device edge cases
 
 #### `src/AuxEngineFacade.h/.cpp`
 
-- add callback-bridge wrapper if engine API is introduced
+- implemented: callback-bridge wrapper around `aux_invoke_record_callback(...)`
+- implemented: callback-output attachment wrapper
 
 ## MVP Milestones
 
-### Milestone 1: Engine and handle scaffolding
+### Milestone 1: Engine and handle scaffolding - implemented
 
 - detect async `record(...).cbname`
 - create and return runtime record handle
@@ -620,7 +680,7 @@ Deliverable:
 
 - async record can start and stop without callback delivery yet
 
-### Milestone 2: Qt session and block capture
+### Milestone 2: Qt session and block capture - implemented
 
 - add `RecordingSession`
 - capture native audio continuously
@@ -631,7 +691,7 @@ Deliverable:
 
 - frontend can accumulate ready callback blocks for an active session
 
-### Milestone 3: Callback invocation
+### Milestone 3: Callback invocation - implemented
 
 - implement callback bridge
 - deliver callback 0
@@ -642,7 +702,7 @@ Deliverable:
 
 - real legacy-style async callback recording works end-to-end
 
-### Milestone 4: Pause/resume and polish
+### Milestone 4: Pause/resume and polish - mostly implemented
 
 - map `pause/resume` to `QAudioSource::suspend/resume`
 - update handle members correctly while paused
@@ -651,6 +711,12 @@ Deliverable:
 Deliverable:
 
 - full handle-style recording control
+
+Remaining polish:
+
+- more manual testing of pause/resume across devices
+- confirm final partial-block behavior
+- confirm handle progress fields after every stop/error path
 
 ## Suggested Testing Matrix
 
@@ -690,22 +756,32 @@ Deliverable:
 
 ## Recommended Order Of Work
 
-1. add async recording backend/control API to `aux_engine`
-2. add recording-handle shape and builtin parsing
-3. add `MainWindow` recording session storage and lifecycle
-4. add block accumulation without callback invocation
-5. add engine callback bridge
-6. add per-block callback delivery
-7. add pause/resume support
-8. harden error paths and diagnostics
+Completed order of work:
+
+1. added async recording backend/control API to `aux_engine`
+2. added recording-handle shape and builtin parsing
+3. added `MainWindow` recording session storage and lifecycle
+4. added block accumulation
+5. added engine callback bridge
+6. added per-block callback delivery
+7. added pause/resume support
+
+Remaining order of work:
+
+1. harden error paths and diagnostics
+2. expand manual testing on real devices
+3. decide remaining open questions
+4. use this design as the baseline for `play()` callback planning
 
 ## Open Questions
 
-- whether callback 0 should expose empty `?data` or omit it
+- callback 0 currently exposes an empty `?data`; decide whether this is final public behavior
 - whether final partial block should always be delivered on stop/close
 - whether to expose string handle members such as device name in v1
-- whether async recording should allow indefinite duration by default when a callback is present
+- async recording currently allows indefinite duration with `durationMs == -1`; decide whether this should also be the default for all callback forms
 - whether callback execution should be serialized globally or only per session
+- whether to replace auxlab2 command-string repair logic with cleaner parser/builtin behavior
+- whether a generalized callback bridge should be introduced before expanding to `play()`
 
 ## Recommendation
 
