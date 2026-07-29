@@ -61,6 +61,8 @@ There is no dedicated lint or formatter target. Match the local Qt/C++17 style a
 - Stereo plot layout toggles such as `F2` must not recreate axes/line handles or change handle identity.
 - Playback and recording sessions must keep runtime handle members (`prog`, `durLeft`, `repeat_left`, `active`, `paused`, etc.) synchronized through the facade.
 - Async recording callbacks may update runtime variables and graphics; keep callback output attachment and graph refresh paths coherent.
+- Console method-call sugar in `MainWindow::runCommand` (`x.play`, `x.stop`, `x.pause`, `x.resume`, `x.delete`) must accept both the bare and empty-parentheses forms and must reject identifiers that only share the prefix (`x.stopped`). Terminate these patterns with a negative lookahead for an identifier char, not `\b`: after an optional `(?:\s*\(\s*\))?` group matches `()`, the position between `)` and a non-word char fails `\b`, so the engine backtracks to the empty alternative and leaves the parentheses in the rewritten command (`x.stop()` -> `stop(x)()`).
+- Replacement order in that block matters: the empty-arg `play` pattern must run before the general `\.play\s*\((.*)\)` pattern, whose greedy capture would otherwise rewrite `x.play()` as `play(x, )`.
 
 ## Coding Conventions
 

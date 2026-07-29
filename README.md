@@ -88,6 +88,42 @@ cmake --build /Users/bkwon/dev/auxlab2/build -j
 - `Ctrl+R`: reverse history search
 - `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+P`, `Ctrl+N`: readline-style keys (platform behavior may vary)
 
+### Console Method Syntax
+
+The console accepts method-style forms on a variable or handle and rewrites them to
+the equivalent AUX function call before evaluation. Both the bare form and the
+empty-parentheses form are accepted and behave identically.
+
+Playback / recording handles:
+
+| Method form | Rewritten as |
+| --- | --- |
+| `x.play` / `x.play()` | `play(x)` |
+| `x.play(0~1)` | `play(x, 0~1)` |
+| `h.stop` / `h.stop()` | `stop(h)` |
+| `h.pause` / `h.pause()` | `pause(h)` |
+| `h.resume` / `h.resume()` | `resume(h)` |
+| `h.delete` / `h.delete()` | `delete(h)` |
+
+Graphics handles:
+
+| Method form | Rewritten as |
+| --- | --- |
+| `f.axes` / `f.axes()` | `axes(f)` |
+| `ax.plot` | `plot(ax)` |
+| `ax.plot(v)` / `ax.plot(v,"b+")` | `plot(ax, v)` / `plot(ax, v,"b+")` |
+| `ax.line(v)` / `ax.line(x,y)` | `line(ax, v)` / `line(ax, x,y)` |
+| `ax.text(...)` | `text(ax, ...)` |
+| `h.delete` / `h.delete()` | `delete(h)` |
+
+Two details worth knowing:
+
+- Rewriting is name-based only. Identifiers that merely start with a method name
+  (`x.stopped`, `x.playback`) are left untouched.
+- The playback/recording forms are rewritten anywhere in the command line, while the
+  graphics forms are recognized only when the method call is the whole command
+  (optionally with an assignment target, e.g. `ln=ax.line(x,y)`).
+
 ### History Box
 
 - `Enter` on selected row: inject command into console input line
