@@ -447,7 +447,7 @@ std::optional<SignalGraphWindow::SelectedRange> SignalGraphWindow::selectedRange
   out.sampleRate = data_.sampleRate;
   out.xStart = (*xRange)[0];
   out.xEnd = (*xRange)[1];
-  out.endsAtSignalEnd = sel.end >= totalTimelineSamples(data_);
+  out.endsAtSignalEnd = sel.end >= std::max(0, totalTimelineSamples(data_) - 1);
   return out;
 }
 
