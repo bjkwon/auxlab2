@@ -5818,8 +5818,7 @@ bool MainWindow::variableSupportsSignalDisplay(const QString& varName) const {
 }
 
 bool MainWindow::variableIsAudio(const QString& varName) const {
-  auto sig = engine_.getSignalData(varName.toStdString());
-  return sig.has_value() && sig->isAudio;
+  return engine_.isAudioVar(varName.toStdString());
 }
 
 bool MainWindow::variableIsString(const QString& varName) const {

@@ -882,6 +882,19 @@ std::optional<uint16_t> AuxEngineFacade::getValueType(const std::string& varName
   return aux_type(obj);
 }
 
+bool AuxEngineFacade::isAudioVar(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return false;
+  }
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return false;
+  }
+  return aux_is_audio(obj);
+}
+
 bool AuxEngineFacade::isStringVar(const std::string& varName) const {
   auxContext* ctx = activeCtx_;
   if (!ctx) {
