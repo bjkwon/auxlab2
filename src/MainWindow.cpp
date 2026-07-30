@@ -2277,7 +2277,7 @@ QString MainWindow::selectedRangeCaptureExpression(const QString& varName) const
     return QString("%1([])").arg(varName);
   }
 
-  if (selected->isAudio && selected->sampleRate > 0) {
+  if (variableIsAudio(varName)) {
     return QString("%1(%2s~%3s)")
         .arg(varName, QString::number(selected->xStart, 'g', 17), QString::number(selected->xEnd, 'g', 17));
   }
