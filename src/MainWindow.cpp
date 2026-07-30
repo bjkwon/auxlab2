@@ -515,6 +515,13 @@ QString formatDoubleArray2(const std::array<double, 2>& values) {
   return QString("[%1 %2]").arg(formatDoubleCompact(values[0]), formatDoubleCompact(values[1]));
 }
 
+QString formatSelectedRange(const std::optional<SignalGraphWindow::SelectedRange>& range) {
+  if (!range.has_value()) {
+    return QStringLiteral("[]");
+  }
+  return QString("[%1 %2]").arg(formatDoubleCompact(range->xStart), formatDoubleCompact(range->xEnd));
+}
+
 QString formatDoubleArray4(const std::array<double, 4>& values) {
   return QString("[%1 %2 %3 %4]").arg(formatDoubleCompact(values[0]),
                                       formatDoubleCompact(values[1]),
@@ -2067,8 +2074,10 @@ void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
     actual.replace(kMethodResumeNoArg, QStringLiteral("resume(\\1)"));
     actual.replace(kMethodDeleteNoArg, QStringLiteral("delete(\\1)"));
   }
+  const QString historyCommand = actual;
+  actual = rewriteSelectedRangeCaptures(actual);
   if (addToHistory && !actual.trimmed().isEmpty()) {
-    addHistory(actual);
+    addHistory(historyCommand);
   }
 
   const QStringList topLevelParts = splitTopLevelStatements(actual);
@@ -2187,6 +2196,98 @@ void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
   reconcileScopedWindows();
 }
 
+QString MainWindow::rewriteSelectedRangeCaptures(const QString& cmd) const {
+  QString out;
+  out.reserve(cmd.size());
+
+  bool inString = false;
+  QChar quote;
+  int i = 0;
+  while (i < cmd.size()) {
+    const QChar ch = cmd.at(i);
+    if (inString) {
+      out.append(ch);
+      if (ch == quote) {
+        if (i + 1 < cmd.size() && cmd.at(i + 1) == quote) {
+          out.append(cmd.at(i + 1));
+          i += 2;
+          continue;
+        }
+        inString = false;
+      }
+      ++i;
+      continue;
+    }
+
+    if (ch == QLatin1Char('"') || ch == QLatin1Char('\'')) {
+      inString = true;
+      quote = ch;
+      out.append(ch);
+      ++i;
+      continue;
+    }
+
+    if (ch == QLatin1Char('/') && i + 1 < cmd.size() && cmd.at(i + 1) == QLatin1Char('/')) {
+      out.append(cmd.mid(i));
+      break;
+    }
+
+    const bool identStart = ch == QLatin1Char('_') || ch.isLetter();
+    if (!identStart) {
+      out.append(ch);
+      ++i;
+      continue;
+    }
+
+    const int start = i;
+    ++i;
+    while (i < cmd.size()) {
+      const QChar c = cmd.at(i);
+      if (c != QLatin1Char('_') && !c.isLetterOrNumber()) {
+        break;
+      }
+      ++i;
+    }
+
+    const QString varName = cmd.mid(start, i - start);
+    if (cmd.mid(i, 5) == QStringLiteral(".?sel")) {
+      const int afterSel = i + 5;
+      if (afterSel >= cmd.size() ||
+          (cmd.at(afterSel) != QLatin1Char('_') && !cmd.at(afterSel).isLetterOrNumber())) {
+        out.append(selectedRangeCaptureExpression(varName));
+        i = afterSel;
+        continue;
+      }
+    }
+
+    out.append(varName);
+  }
+
+  return out;
+}
+
+QString MainWindow::selectedRangeCaptureExpression(const QString& varName) const {
+  auto* window = graphicsManager_.findNamedFigure(varName);
+  if (!window) {
+    return QString("%1([])").arg(varName);
+  }
+
+  const auto selected = window->selectedRangeCapture();
+  if (!selected.has_value()) {
+    return QString("%1([])").arg(varName);
+  }
+
+  if (selected->isAudio && selected->sampleRate > 0) {
+    return QString("%1(%2s~%3s)")
+        .arg(varName, QString::number(selected->xStart, 'g', 17), QString::number(selected->xEnd, 'g', 17));
+  }
+
+  return QString("%1(%2:%3)")
+      .arg(varName,
+           QString::number(static_cast<long long>(std::llround(selected->xStart))),
+           QString::number(static_cast<long long>(std::llround(selected->xEnd))));
+}
+
 void MainWindow::appendConsoleMessage(const QString& text) {
   if (!commandBox_) {
     return;
@@ -2214,7 +2315,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     normalized = assignMatch.captured(2).trimmed();
   }
 
-  static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes(?:\s*\(\s*\))?$)");
+  static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes\s*\(\s*\)$)");
   static const QRegularExpression kMethodDeleteNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.delete(?:\s*\(\s*\))?$)");
   static const QRegularExpression kMethodPlotNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot$)");
   static const QRegularExpression kMethodPlot(R"(^([A-Za-z_][A-Za-z0-9_]*)\.plot\s*\((.*)\)$)");
@@ -2463,6 +2564,27 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     return values;
   };
 
+  auto evaluateGraphicsVectorExpr = [&](const QString& expr) -> std::optional<QVector<double>> {
+    QVector<double> direct;
+    if (parseDoubleVectorExpr(expr, direct)) {
+      return direct;
+    }
+
+    static const QRegularExpression kHandleGetExprPattern(R"(^(.+)\.([A-Za-z_][A-Za-z0-9_]*)$)");
+    if (const auto getMatch = kHandleGetExprPattern.match(expr.trimmed()); getMatch.hasMatch()) {
+      std::uint64_t sourceHandleId = 0;
+      if (resolveHandleId(getMatch.captured(1).trimmed(), sourceHandleId) && isGraphicsHandleId(sourceHandleId)) {
+        const QString value = graphicsHandleProperty(sourceHandleId, getMatch.captured(2));
+        QVector<double> values;
+        if (!value.startsWith(QStringLiteral("Error:")) && parseDoubleVectorExpr(value, values)) {
+          return values;
+        }
+      }
+    }
+
+    return evaluateVectorExpr(expr);
+  };
+
   auto evaluateGraphicsExpr = [this](const QString& expr) -> std::optional<QString> {
     const QString tmpVar = nextGraphicsTempName();
     const EvalResult evalResult = engine_.eval(QString("%1=%2").arg(tmpVar, expr).toStdString());
@@ -2517,6 +2639,29 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     };
 
     if (handleId == figureId) {
+      if (key == "selrange") {
+        if (!model.isNamedPlot()) {
+          return QString("Error: unsupported or invalid figure property assignment: %1").arg(prop);
+        }
+        QVector<double> vals;
+        if (rhs.trimmed() == QStringLiteral("[]")) {
+          owner->clearSelectedRange();
+          return QStringLiteral("[]");
+        }
+        const auto maybeVals = evaluateGraphicsVectorExpr(rhs);
+        if (!maybeVals.has_value()) {
+          return QString("Error: invalid figure property value for %1").arg(prop);
+        }
+        vals = *maybeVals;
+        if (vals.size() != 2) {
+          return QString("Error: invalid figure property value for %1").arg(prop);
+        }
+        const auto* axes = model.leftChannelAxes();
+        if (!axes || !owner->setSelectedRange(axes->common.id, vals[0], vals[1])) {
+          return QString("Error: invalid figure property value for %1").arg(prop);
+        }
+        return QStringLiteral("[]");
+      }
       if (key == "pos") {
         std::array<double, 4> pos{};
         if (!parseMatlabPosVector(rhs, pos)) {
@@ -2553,6 +2698,15 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
           owner->setAxesXLim(handleId, {vals[0], vals[1]});
         } else {
           owner->setAxesYLim(handleId, {vals[0], vals[1]});
+        }
+      } else if (key == "selrange") {
+        if (rhs.trimmed() == QStringLiteral("[]")) {
+          owner->clearSelectedRange(handleId);
+          return QStringLiteral("[]");
+        }
+        const auto vals = evaluateGraphicsVectorExpr(rhs);
+        if (!vals.has_value() || vals->size() != 2 || !owner->setSelectedRange(handleId, (*vals)[0], (*vals)[1])) {
+          return QString("Error: invalid axes property value for %1").arg(prop);
         }
       } else if (key == "fontname" || key == "xscale" || key == "yscale") {
         if (!isQuotedStringLiteral(rhs)) return QString("Error: invalid axes property value for %1").arg(prop);
@@ -5129,6 +5283,14 @@ std::optional<std::vector<std::uint64_t>> MainWindow::graphicsHandleReferenceIds
   };
 
   if (handleId == model.figure().common.id) {
+    if (key == "axes") {
+      std::vector<std::uint64_t> ids;
+      ids.reserve(model.axes().size());
+      for (const auto& axes : model.axes()) {
+        ids.push_back(axes.common.id);
+      }
+      return ids;
+    }
     return commonRefs(model.figure().common);
   }
   if (const auto axes = std::find_if(model.axes().begin(), model.axes().end(), [handleId](const GraphicsAxesHandle& ax) {
@@ -5266,12 +5428,24 @@ std::vector<VarSnapshot> MainWindow::graphicsHandleMembersForId(std::uint64_t ha
                                QString::number(childIds->size()),
                                graphicsHandleProperty(handleId, QStringLiteral("children"))));
   }
+  if (typeName == "figure") {
+    if (const auto axesIds = graphicsHandleReferenceIds(handleId, QStringLiteral("axes")); axesIds.has_value()) {
+      out.push_back(makeSnapshot(QStringLiteral("axes"), QStringLiteral("HNDL"),
+                                 QString::number(axesIds->size()),
+                                 graphicsHandleProperty(handleId, QStringLiteral("axes"))));
+    }
+    const QString selrange = graphicsHandleProperty(handleId, QStringLiteral("selrange"));
+    if (!selrange.startsWith(QStringLiteral("Error:"))) {
+      out.push_back(makeSnapshot(QStringLiteral("selrange"), QStringLiteral("VECT"), QStringLiteral("2"), selrange));
+    }
+  }
 
   if (typeName == "axes") {
     out.push_back(makeSnapshot(QStringLiteral("box"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("box"))));
     out.push_back(makeSnapshot(QStringLiteral("linewidth"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("linewidth"))));
     out.push_back(makeSnapshot(QStringLiteral("xlim"), QStringLiteral("VECT"), QStringLiteral("2"), graphicsHandleProperty(handleId, QStringLiteral("xlim"))));
     out.push_back(makeSnapshot(QStringLiteral("ylim"), QStringLiteral("VECT"), QStringLiteral("2"), graphicsHandleProperty(handleId, QStringLiteral("ylim"))));
+    out.push_back(makeSnapshot(QStringLiteral("selrange"), QStringLiteral("VECT"), QStringLiteral("2"), graphicsHandleProperty(handleId, QStringLiteral("selrange"))));
     out.push_back(makeSnapshot(QStringLiteral("fontname"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontname"))));
     out.push_back(makeSnapshot(QStringLiteral("fontsize"), QStringLiteral("SCLR"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("fontsize"))));
     out.push_back(makeSnapshot(QStringLiteral("xscale"), QStringLiteral("TEXT"), QStringLiteral("1"), graphicsHandleProperty(handleId, QStringLiteral("xscale"))));
@@ -5331,6 +5505,20 @@ QString MainWindow::graphicsHandleProperty(std::uint64_t handleId, const QString
     const auto& fig = model.figure();
     if (key == "type") return QStringLiteral("\"figure\"");
     if (key == "pos") return formatDoubleArray4(owner->currentFigurePos());
+    if (key == "axes") {
+      std::vector<std::uint64_t> ids;
+      ids.reserve(model.axes().size());
+      for (const auto& axes : model.axes()) {
+        ids.push_back(axes.common.id);
+      }
+      return formatChildren(ids);
+    }
+    if (key == "selrange") {
+      if (!model.isNamedPlot()) {
+        return QString("Error: unsupported figure property: %1").arg(prop);
+      }
+      return formatSelectedRange(owner->selectedRangeCapture());
+    }
     if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
     return QString("Error: unsupported figure property: %1").arg(prop);
   }
@@ -5343,6 +5531,7 @@ QString MainWindow::graphicsHandleProperty(std::uint64_t handleId, const QString
     if (key == "linewidth") return QString::number(axes->lineWidth);
     if (key == "xlim") return formatDoubleArray2(axes->xlim);
     if (key == "ylim") return formatDoubleArray2(axes->ylim);
+    if (key == "selrange") return formatSelectedRange(owner->selectedRangeCapture(handleId));
     if (key == "fontname") return QString("\"%1\"").arg(axes->fontName);
     if (key == "fontsize") return QString::number(axes->fontSize);
     if (key == "xscale") return QString("\"%1\"").arg(axes->xscale);
@@ -5401,9 +5590,15 @@ QString MainWindow::graphicsHandleDump(std::uint64_t handleId) const {
   };
   if (typeName == "axes") {
     props << QStringLiteral("box") << QStringLiteral("linewidth") << QStringLiteral("xlim")
-          << QStringLiteral("ylim") << QStringLiteral("fontname") << QStringLiteral("fontsize")
-          << QStringLiteral("xscale") << QStringLiteral("yscale") << QStringLiteral("xgrid")
+          << QStringLiteral("ylim") << QStringLiteral("selrange") << QStringLiteral("fontname")
+          << QStringLiteral("fontsize") << QStringLiteral("xscale") << QStringLiteral("yscale") << QStringLiteral("xgrid")
           << QStringLiteral("ygrid");
+  } else if (typeName == "figure") {
+    props << QStringLiteral("axes");
+    const QString selrange = graphicsHandleProperty(handleId, QStringLiteral("selrange"));
+    if (!selrange.startsWith(QStringLiteral("Error:"))) {
+      props << QStringLiteral("selrange");
+    }
   } else if (typeName == "line") {
     props << QStringLiteral("xdata") << QStringLiteral("ydata") << QStringLiteral("linewidth")
           << QStringLiteral("linestyle") << QStringLiteral("marker") << QStringLiteral("markersize");

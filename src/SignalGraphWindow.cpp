@@ -421,6 +421,66 @@ void SignalGraphWindow::setAxesYLim(std::uint64_t axesId, const std::array<doubl
   update();
 }
 
+std::optional<SignalGraphWindow::SelectedRange> SignalGraphWindow::selectedRangeCapture() const {
+  const auto* axes = graphics_.leftChannelAxes();
+  if (!axes) {
+    return std::nullopt;
+  }
+  return selectedRangeCapture(axes->common.id);
+}
+
+std::optional<SignalGraphWindow::SelectedRange> SignalGraphWindow::selectedRangeCapture(std::uint64_t axesId) const {
+  const Range sel = selectionForAxes(axesId);
+  if (sel.end <= sel.start) {
+    return std::nullopt;
+  }
+
+  const auto xRange = xRangeForSampleRange(axesId, sel);
+  if (!xRange.has_value()) {
+    return std::nullopt;
+  }
+
+  SelectedRange out;
+  out.start = sel.start;
+  out.end = sel.end;
+  out.isAudio = data_.isAudio;
+  out.sampleRate = data_.sampleRate;
+  out.xStart = (*xRange)[0];
+  out.xEnd = (*xRange)[1];
+  return out;
+}
+
+bool SignalGraphWindow::setSelectedRange(std::uint64_t axesId, double xStart, double xEnd) {
+  const auto range = sampleRangeForXRange(axesId, xStart, xEnd);
+  if (!range.has_value()) {
+    return false;
+  }
+
+  const Range clamped = clampRange(*range);
+  if (graphics_.isNamedPlot()) {
+    for (const auto& axes : graphics_.axes()) {
+      axesSelectionRanges_[axes.common.id] = clamped;
+    }
+  } else {
+    axesSelectionRanges_[axesId] = clamped;
+  }
+  selStart_ = clamped.start;
+  selEnd_ = clamped.end;
+  update();
+  return true;
+}
+
+void SignalGraphWindow::clearSelectedRange(std::optional<std::uint64_t> axesId) {
+  if (axesId.has_value() && !graphics_.isNamedPlot()) {
+    axesSelectionRanges_.erase(*axesId);
+  } else {
+    axesSelectionRanges_.clear();
+  }
+  selStart_ = -1;
+  selEnd_ = -1;
+  update();
+}
+
 std::array<double, 4> SignalGraphWindow::currentFigurePos() const {
   return qtRectToMatlabFigurePos(geometry());
 }
@@ -445,13 +505,16 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
     p.drawImage(QPoint(0, 0), staticLayer_);
   }
 
-  if (selStart_ >= 0 && selEnd_ >= 0 && selStart_ != selEnd_) {
-    const int s = std::min(selStart_, selEnd_);
-    const int e = std::max(selStart_, selEnd_);
-    const QRect selectionRect = selectionReferenceRect();
-    int x1 = sampleToX(selectionRect, s);
-    int x2 = sampleToX(selectionRect, e);
-    p.fillRect(QRect(std::min(x1, x2), plot.top(), std::abs(x2 - x1), plot.height()), QColor(72, 120, 72, 110));
+  for (const auto& axes : graphics_.axes()) {
+    const Range sel = selectionForAxes(axes.common.id);
+    if (!axes.common.visible || sel.end <= sel.start) {
+      continue;
+    }
+    const QRect selectionRect = axesRectForPlot(axes, plot);
+    const int x1 = sampleToX(selectionRect, sel.start);
+    const int x2 = sampleToX(selectionRect, sel.end);
+    p.fillRect(QRect(std::min(x1, x2), selectionRect.top(), std::abs(x2 - x1), selectionRect.height()),
+               QColor(72, 120, 72, 110));
   }
 
   if (audioSink_ && audioSink_->state() != QAudio::StoppedState && workspaceActive_) {
@@ -677,8 +740,17 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
 
   updateHoverFromPoint(event->pos());
   selecting_ = true;
+  selectingAxesId_ = axesIdAtPoint(event->pos());
+  if (selectingAxesId_ == 0) {
+    if (const auto* axes = graphics_.leftChannelAxes()) {
+      selectingAxesId_ = axes->common.id;
+    }
+  }
   selStart_ = xToSample(event->pos());
   selEnd_ = selStart_;
+  if (selectingAxesId_ != 0) {
+    axesSelectionRanges_[selectingAxesId_] = {selStart_, selEnd_};
+  }
   update();
 }
 
@@ -703,6 +775,16 @@ void SignalGraphWindow::mouseMoveEvent(QMouseEvent* event) {
     return QWidget::mouseMoveEvent(event);
   }
   selEnd_ = xToSample(event->pos());
+  if (selectingAxesId_ != 0) {
+    const Range range{std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
+    if (graphics_.isNamedPlot()) {
+      for (const auto& axes : graphics_.axes()) {
+        axesSelectionRanges_[axes.common.id] = range;
+      }
+    } else {
+      axesSelectionRanges_[selectingAxesId_] = range;
+    }
+  }
   update();
 }
 
@@ -720,6 +802,21 @@ void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
     updateHoverFromPoint(event->pos());
     selecting_ = false;
     selEnd_ = xToSample(event->pos());
+    if (selectingAxesId_ != 0) {
+      const Range range{std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
+      if (range.end > range.start) {
+        if (graphics_.isNamedPlot()) {
+          for (const auto& axes : graphics_.axes()) {
+            axesSelectionRanges_[axes.common.id] = range;
+          }
+        } else {
+          axesSelectionRanges_[selectingAxesId_] = range;
+        }
+      } else {
+        axesSelectionRanges_.erase(selectingAxesId_);
+      }
+    }
+    selectingAxesId_ = 0;
     update();
   }
 }
@@ -1095,10 +1192,126 @@ SignalGraphWindow::Range SignalGraphWindow::activePlaybackRange() const {
 }
 
 SignalGraphWindow::Range SignalGraphWindow::normalizedSelection() const {
+  if (const auto* axes = graphics_.leftChannelAxes()) {
+    const Range range = selectionForAxes(axes->common.id);
+    if (range.end > range.start) {
+      return range;
+    }
+  }
   if (selStart_ < 0 || selEnd_ < 0 || selStart_ == selEnd_) {
     return {};
   }
   return {std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
+}
+
+SignalGraphWindow::Range SignalGraphWindow::selectionForAxes(std::uint64_t axesId) const {
+  const auto it = axesSelectionRanges_.find(axesId);
+  if (it == axesSelectionRanges_.end()) {
+    return {};
+  }
+  return it->second;
+}
+
+std::uint64_t SignalGraphWindow::axesIdAtPoint(const QPoint& pt) const {
+  const QRect plot = plotRect();
+  for (const auto& axes : graphics_.axes()) {
+    if (!axes.common.visible) {
+      continue;
+    }
+    if (axesRectForPlot(axes, plot).contains(pt)) {
+      return axes.common.id;
+    }
+  }
+  return 0;
+}
+
+std::optional<SignalGraphWindow::Range> SignalGraphWindow::sampleRangeForXRange(std::uint64_t axesId,
+                                                                                double xStart,
+                                                                                double xEnd) const {
+  if (!std::isfinite(xStart) || !std::isfinite(xEnd) || xStart == xEnd) {
+    return std::nullopt;
+  }
+  const auto axes = std::find_if(graphics_.axes().begin(), graphics_.axes().end(), [axesId](const GraphicsAxesHandle& ax) {
+    return ax.common.id == axesId;
+  });
+  if (axes == graphics_.axes().end()) {
+    return std::nullopt;
+  }
+  const auto lines = graphics_.linesForAxes(axesId);
+  if (lines.empty() || !lines.front()) {
+    return std::nullopt;
+  }
+  const auto* line = lines.front();
+  const int totalLen = line->ydata.size();
+  if (totalLen <= 0) {
+    return std::nullopt;
+  }
+
+  const double lo = std::min(xStart, xEnd);
+  const double hi = std::max(xStart, xEnd);
+  if (data_.isAudio && data_.sampleRate > 0) {
+    const double fs = static_cast<double>(data_.sampleRate);
+    const int start = static_cast<int>(std::llround((lo - data_.startTimeSec) * fs));
+    const int end = static_cast<int>(std::llround((hi - data_.startTimeSec) * fs));
+    return Range{start, end};
+  }
+
+  const QVector<double>& xdata = line->xdata;
+  if (xdata.isEmpty() || xdata.size() != totalLen) {
+    return std::nullopt;
+  }
+
+  int first = -1;
+  int last = -1;
+  for (int i = 0; i < xdata.size(); ++i) {
+    const double x = xdata[i];
+    if (x >= lo && x <= hi) {
+      if (first < 0) {
+        first = i;
+      }
+      last = i;
+    }
+  }
+  if (first < 0 || last < first) {
+    return std::nullopt;
+  }
+  return Range{first, last + 1};
+}
+
+std::optional<std::array<double, 2>> SignalGraphWindow::xRangeForSampleRange(std::uint64_t axesId,
+                                                                             const Range& range) const {
+  const auto axes = std::find_if(graphics_.axes().begin(), graphics_.axes().end(), [axesId](const GraphicsAxesHandle& ax) {
+    return ax.common.id == axesId;
+  });
+  if (axes == graphics_.axes().end()) {
+    return std::nullopt;
+  }
+  const auto lines = graphics_.linesForAxes(axesId);
+  if (lines.empty() || !lines.front()) {
+    return std::nullopt;
+  }
+  const auto* line = lines.front();
+  const int totalLen = line->ydata.size();
+  if (totalLen <= 0) {
+    return std::nullopt;
+  }
+
+  const Range clamped = clampRange(range);
+  if (data_.isAudio && data_.sampleRate > 0) {
+    const double fs = static_cast<double>(data_.sampleRate);
+    return std::array<double, 2>{data_.startTimeSec + static_cast<double>(clamped.start) / fs,
+                                 data_.startTimeSec + static_cast<double>(clamped.end) / fs};
+  }
+
+  const QVector<double>& xdata = line->xdata;
+  if (xdata.isEmpty() || xdata.size() != totalLen) {
+    return std::nullopt;
+  }
+
+  const int lastIndex = std::max(0, static_cast<int>(xdata.size()) - 1);
+  const int start = std::clamp(clamped.start, 0, lastIndex);
+  const int end = std::clamp(clamped.end - 1, start, lastIndex);
+  return std::array<double, 2>{xdata[start], xdata[end]};
 }
 
 int SignalGraphWindow::currentPlaybackSample() const {

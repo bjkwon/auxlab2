@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <functional>
+#include <map>
 
 class SignalGraphWindow : public QWidget {
   Q_OBJECT
@@ -31,6 +32,14 @@ public:
     QRect box;
     QRect inner;
     QRect leftMargin;
+  };
+  struct SelectedRange {
+    int start = 0;
+    int end = 0;
+    bool isAudio = false;
+    int sampleRate = 0;
+    double xStart = 0.0;
+    double xEnd = 0.0;
   };
 
   SignalGraphWindow(const QString& varName,
@@ -61,6 +70,10 @@ public:
   void refreshGraphics();
   void setAxesXLim(std::uint64_t axesId, const std::array<double, 2>& xlim);
   void setAxesYLim(std::uint64_t axesId, const std::array<double, 2>& ylim);
+  std::optional<SelectedRange> selectedRangeCapture() const;
+  std::optional<SelectedRange> selectedRangeCapture(std::uint64_t axesId) const;
+  bool setSelectedRange(std::uint64_t axesId, double xStart, double xEnd);
+  void clearSelectedRange(std::optional<std::uint64_t> axesId = std::nullopt);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -99,6 +112,10 @@ private:
   void startPlaybackFromSample(const Range& range, int startSample, bool startPaused);
   Range activePlaybackRange() const;
   Range normalizedSelection() const;
+  Range selectionForAxes(std::uint64_t axesId) const;
+  std::uint64_t axesIdAtPoint(const QPoint& pt) const;
+  std::optional<Range> sampleRangeForXRange(std::uint64_t axesId, double xStart, double xEnd) const;
+  std::optional<std::array<double, 2>> xRangeForSampleRange(std::uint64_t axesId, const Range& range) const;
   int currentPlaybackSample() const;
   void handlePlaybackAfterRangeChange();
   int xToSample(const QPoint& pt) const;
@@ -133,8 +150,10 @@ private:
   double yMax_ = 1.0;
 
   bool selecting_ = false;
+  std::uint64_t selectingAxesId_ = 0;
   int selStart_ = -1;
   int selEnd_ = -1;
+  std::map<std::uint64_t, Range> axesSelectionRanges_;
   bool hoverActive_ = false;
   int hoverSample_ = -1;
   double hoverXCoord_ = 0.0;

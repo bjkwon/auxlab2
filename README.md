@@ -114,6 +114,13 @@ History file:
 - `Left` / `Right`: pan view
 - Mouse drag: select range
 - `Enter`: zoom to selected range
+- Selected ranges are available from graphics handles:
+  - `r = fig.axes.selrange` returns `[]` or `[start end]` in the axes x-coordinate system.
+  - `fig.axes.selrange = [start end]` sets the selected range.
+  - `fig.axes.selrange = []` clears it.
+  - `fig2.axes.selrange = fig.axes.selrange` copies it when each `axes` reference resolves to one axes.
+  - Named figures also expose `fig.selrange` as the shared selection mirror for stereo/namesake plots.
+- For a named plot, `x.?sel` returns the data block inside the named figure's selected range.
 - Range navigation shortcuts:
   - macOS: `Cmd+Left`: set view start to `0`
   - Windows/Linux: `Alt+Left`: set view start to `0`

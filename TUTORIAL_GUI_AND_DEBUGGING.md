@@ -77,6 +77,17 @@ Open from variable list with `Enter`.
 - `Left` / `Right`: pan view
 - Mouse drag: select a range
 - `Enter`: zoom to selected range
+- The selected range is also a graphics-handle property:
+
+```aux
+h = figure("x")
+r = h.axes.selrange
+h.axes.selrange = [5 10]
+h.axes.selrange = []
+h2.axes.selrange = h.axes.selrange
+```
+
+`selrange` is `[]` or `[start end]` in the axes x-coordinate system. Named figures also expose `h.selrange` as a shared selection mirror. For a named plot, `x.?sel` is the selected data block represented by that range.
 - Range anchors and history:
   - macOS: `Cmd+Left`: snap the visible range start to `0`
   - Windows/Linux: `Alt+Left`: snap the visible range start to `0`
