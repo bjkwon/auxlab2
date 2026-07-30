@@ -40,6 +40,7 @@ public:
     int sampleRate = 0;
     double xStart = 0.0;
     double xEnd = 0.0;
+    bool endsAtSignalEnd = false;
   };
 
   SignalGraphWindow(const QString& varName,

@@ -2278,6 +2278,9 @@ QString MainWindow::selectedRangeCaptureExpression(const QString& varName) const
   }
 
   if (variableIsAudio(varName)) {
+    if (selected->endsAtSignalEnd) {
+      return QString("%1(%2s~end)").arg(varName, QString::number(selected->xStart, 'g', 17));
+    }
     return QString("%1(%2s~%3s)")
         .arg(varName, QString::number(selected->xStart, 'g', 17), QString::number(selected->xEnd, 'g', 17));
   }
