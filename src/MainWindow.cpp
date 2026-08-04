@@ -3268,9 +3268,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
   std::array<double, 4> pos{};
   if (parseMatlabPosVector(arg, pos)) {
-    auto* window = createEmptyFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), matlabFigureRectToQt(pos));
-    const std::uint64_t id = window ? window->graphicsModel().figure().common.id : 0;
-    return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
+    return finalizeOutput(QStringLiteral("Error: figure([x y w h]) is obsolete; use h=figure(); h.pos=[x y w h]."));
   }
 
   std::uint64_t id = 0;

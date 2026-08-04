@@ -80,7 +80,7 @@ Open from variable list with `Enter`.
 - The selected range is also a graphics-handle property:
 
 ```aux
-h = figure("x")
+h = figure(x)
 r = h.axes.selrange
 h.axes.selrange = [5 10]
 h.axes.selrange = []

@@ -108,13 +108,17 @@ Run these in the `auxlab2` command console.
 ### G-AUX-01 `figure` call forms
 
 - Test `h=figure()`
-- Test `h=figure([100 100 640 480])`
+- Test `h.pos=[100 100 640 480]`
 - Test `h2=figure(h)`
-- Test `hn=figure("mono")`
+- Test `hn=figure(mono)`
+- Test legacy compatibility with `hn2=figure("mono")`
+- Test obsolete-position rejection with `hp=figure([100 100 640 480])`
 - Expected:
-  - handle returned
+  - handles returned for supported forms
   - `gcf` updated to target figure
+  - `h.pos=[100 100 640 480]` moves/resizes the figure
   - named figure reuses existing window when called again with same source path
+  - `figure([100 100 640 480])` returns a clear obsolete-form error
 
 ### G-AUX-02 `axes` call forms
 
@@ -401,7 +405,7 @@ Use mouse and keyboard in `auxlab2`.
 
 ### G-GUI-03 Variable-browser integration
 
-- Plot named figure with `figure("mono")`
+- Plot named figure with `figure(mono)`
 - Change source variable data
 - Refresh variable browser and graph
 - Expected:

@@ -56,17 +56,23 @@ Expected:
 Run:
 
 ```aux
-h=figure([100 100 640 480])
-hn=figure("mono")
+h=figure()
+h.pos=[100 100 640 480]
+hn=figure(mono)
+hn2=figure("mono")
 h2=figure(h)
+hp=figure([100 100 640 480])
 ```
 
 Check:
 
 - `h` is created as a handle
+- `h.pos=[100 100 640 480]` moves/resizes the figure
 - a graph window appears for `hn`
+- `hn2` reuses the named figure for legacy compatibility
 - `figure(h)` focuses the existing figure instead of creating a duplicate
-- no error is shown
+- `figure([100 100 640 480])` reports the obsolete-position-form error
+- no unexpected error is shown
 
 ### 3.2 `axes`
 

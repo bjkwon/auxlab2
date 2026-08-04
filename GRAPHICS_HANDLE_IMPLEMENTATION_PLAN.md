@@ -15,7 +15,7 @@ These handles should support:
 - property access and mutation
 - current-handle pseudo-vars `gcf` and `gca`
 - unnamed plots via `plot(...)`
-- named plots via `figure("varname")`
+- named plots via `figure(varname)` (`figure("varname")` remains legacy-compatible)
 - deletion and handle invalidation
 - stereo waveform layout with stable handle identity across `F2`
 
@@ -59,7 +59,7 @@ Deleting a non-current figure or axes must not change `gcf` or `gca`.
   - plotted data is a snapshot
   - later source-variable changes do not update it
 - Named figure
-  - created by `figure("x")`
+  - created by `figure(x)` (`figure("x")` remains legacy-compatible)
   - associated with the source variable/path
   - later source-variable changes may recompute linked `xdata`/`ydata`
   - user-overridden style/layout properties are preserved
@@ -175,7 +175,7 @@ Named-plot refresh may recompute only still-auto properties plus linked data.
 Forms:
 
 - `y = figure()`
-- `y = figure(h_or_pos)`
+- `y = figure(h_or_source)`
 
 Behavior:
 
@@ -189,19 +189,17 @@ Behavior:
   - return same figure handle
   - update `gcf`
   - update `gca` to that figure's current axes if available
-- `figure(pos)`
-  - create new empty figure at given position
-  - no default axes created
-  - return figure handle
-  - set `gcf`
 
-Also support named figure creation:
+Support named figure lookup:
 
-- `figure("x")`
-  - create named figure associated with variable/path `x`
-  - initialize graph content using current plotting defaults
+- `figure(x)`
+  - return the named figure associated with variable/path `x`
   - return figure handle
   - set `gcf` and `gca`
+- `figure("x")`
+  - legacy-compatible spelling for `figure(x)`
+
+The former `figure([x y w h])` position-vector form is obsolete. Use `h=figure(); h.pos=[x y w h]` for positioned figure creation.
 
 ### `plot`
 
@@ -403,7 +401,7 @@ Recommended order is from low-level creation to high-level convenience.
 
 - aux_engine already has GO-related concepts that should be reused instead of inventing pure value-copy structs for handles.
 - Public coordinate semantics should follow MATLAB bottom-left conventions even if Qt rendering remains top-left internally.
-- `plot(...)` and `figure("x")` share some creation logic but differ in named-vs-unnamed refresh semantics.
+- `plot(...)` and `figure(x)` share some lookup/rendering logic but differ in named-vs-unnamed refresh semantics.
 - Keep v1 conservative:
   - no exposed `nextplot` property yet
   - no flexible style-string parser beyond fixed order
