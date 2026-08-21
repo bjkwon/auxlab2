@@ -5515,10 +5515,11 @@ QString MainWindow::graphicsHandleProperty(std::uint64_t handleId, const QString
       return formatChildren(ids);
     }
     if (key == "selrange") {
-      if (!model.isNamedPlot()) {
+      const auto selected = owner->selectedRangeCapture();
+      if (!selected.has_value() && !model.isNamedPlot()) {
         return QString("Error: unsupported figure property: %1").arg(prop);
       }
-      return formatSelectedRange(owner->selectedRangeCapture());
+      return formatSelectedRange(selected);
     }
     if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
     return QString("Error: unsupported figure property: %1").arg(prop);
