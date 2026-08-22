@@ -207,7 +207,7 @@ Example with explicit overrides:
 ```bash
 AUXLAB_CERT="Developer ID Application: Your Name (TEAMID)" \
 KEYCHAIN_PROFILE="auxlab2-notary" \
-DMG_BASENAME="auxlab2-0.9.4-macos-arm64" \
+DMG_BASENAME="auxlab2-0.9.6-macos-arm64" \
 /Users/bkwon/dev/auxlab2/scripts/release_macos.sh
 ```
 
@@ -246,8 +246,8 @@ Useful validation commands while debugging:
 ```bash
 codesign --verify --deep --strict /tmp/auxlab2-stage/auxlab2.app
 spctl --assess --type execute --verbose=4 /tmp/auxlab2-stage/auxlab2.app
-codesign -dv --verbose=4 /tmp/auxlab2-stage/auxlab2.app/Contents/MacOS/auxlab2-0.9.4
-spctl --assess --type open --verbose=4 /Users/bkwon/dev/auxlab2/build-release/auxlab2-0.9.4-macos-arm64.dmg
+codesign -dv --verbose=4 /tmp/auxlab2-stage/auxlab2.app/Contents/MacOS/auxlab2-0.9.6
+spctl --assess --type open --verbose=4 /Users/bkwon/dev/auxlab2/build-release/auxlab2-0.9.6-macos-arm64.dmg
 ```
 
 ### Notes

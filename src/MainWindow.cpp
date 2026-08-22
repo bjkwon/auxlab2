@@ -2060,13 +2060,22 @@ void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
   QString actual = cmd;
   lastStartedAsyncRecordHandle_ = 0;
   lastStartedAsyncRecordCallback_.clear();
+  // The optional empty-arg group must not be followed by \b: after matching "()" the next
+  // position sits between ')' and a non-word char (or end of input), so \b fails, the engine
+  // backtracks to the empty alternative and leaves the "()" behind ("x.stop()" -> "stop(x)()").
+  // A negative lookahead for an identifier char rejects "x.stopped" the same way \b did while
+  // still accepting end of input, ')', ';', etc.
+  static const QRegularExpression kMethodPlayEmptyArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\s*\(\s*\)(?![A-Za-z0-9_]))");
   static const QRegularExpression kMethodPlayNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\b(?!\s*\())");
   static const QRegularExpression kMethodPlayArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.play\s*\((.*)\))");
-  static const QRegularExpression kMethodStopNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.stop(?:\s*\(\s*\))?\b)");
-  static const QRegularExpression kMethodPauseNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.pause(?:\s*\(\s*\))?\b)");
-  static const QRegularExpression kMethodResumeNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.resume(?:\s*\(\s*\))?\b)");
-  static const QRegularExpression kMethodDeleteNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.delete(?:\s*\(\s*\))?\b)");
+  static const QRegularExpression kMethodStopNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.stop(?:\s*\(\s*\))?(?![A-Za-z0-9_]))");
+  static const QRegularExpression kMethodPauseNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.pause(?:\s*\(\s*\))?(?![A-Za-z0-9_]))");
+  static const QRegularExpression kMethodResumeNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.resume(?:\s*\(\s*\))?(?![A-Za-z0-9_]))");
+  static const QRegularExpression kMethodDeleteNoArg(R"(\b([A-Za-z_][A-Za-z0-9_]*)\.delete(?:\s*\(\s*\))?(?![A-Za-z0-9_]))");
   if (!actual.trimmed().isEmpty()) {
+    // Must run before kMethodPlayArg, whose (.*) capture would otherwise turn "x.play()"
+    // into "play(x, )".
+    actual.replace(kMethodPlayEmptyArg, QStringLiteral("play(\\1)"));
     actual.replace(kMethodPlayArg, QStringLiteral("play(\\1, \\2)"));
     actual.replace(kMethodPlayNoArg, QStringLiteral("play(\\1)"));
     actual.replace(kMethodStopNoArg, QStringLiteral("stop(\\1)"));
