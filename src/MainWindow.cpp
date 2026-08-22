@@ -2479,6 +2479,30 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
       return true;
     }
 
+    static const QRegularExpression kFigureOfIdentifier(R"(^figure\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$)");
+    if (const auto figMatch = kFigureOfIdentifier.match(trimmedText); figMatch.hasMatch()) {
+      const QString varName = figMatch.captured(1);
+      const auto varType = engine_.getValueType(varName.toStdString());
+      const bool isHandleVar = varType.has_value() && (*varType & kDisplayTypebitHandle) != 0;
+      if (!isHandleVar) {
+        // figure(dataVar) has no native handle-probing path that doesn't re-execute
+        // figure() for real (creating a duplicate window); resolve it the same way
+        // figure("dataVar") does instead, against the window already showing it.
+        SignalGraphWindow* window = findSignalGraphWindow(varName, engine_.activeContext());
+        if (!window) {
+          window = graphicsManager_.findNamedFigure(varName);
+        }
+        if (!window) {
+          return false;
+        }
+        outId = window->graphicsModel().figure().common.id;
+        if (sourceVar) {
+          sourceVar->clear();
+        }
+        return outId != 0;
+      }
+    }
+
     if (const auto pathIds = graphicsHandlePathIds(trimmedText); pathIds.has_value() && pathIds->size() == 1) {
       outId = pathIds->front();
       if (sourceVar) {
@@ -2652,9 +2676,6 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
     if (handleId == figureId) {
       if (key == "selrange") {
-        if (!model.isNamedPlot()) {
-          return QString("Error: unsupported or invalid figure property assignment: %1").arg(prop);
-        }
         QVector<double> vals;
         if (rhs.trimmed() == QStringLiteral("[]")) {
           owner->clearSelectedRange();
@@ -5524,11 +5545,7 @@ QString MainWindow::graphicsHandleProperty(std::uint64_t handleId, const QString
       return formatChildren(ids);
     }
     if (key == "selrange") {
-      const auto selected = owner->selectedRangeCapture();
-      if (!selected.has_value() && !model.isNamedPlot()) {
-        return QString("Error: unsupported figure property: %1").arg(prop);
-      }
-      return formatSelectedRange(selected);
+      return formatSelectedRange(owner->selectedRangeCapture());
     }
     if (const QString value = commonGetter(fig.common); !value.isEmpty()) return value;
     return QString("Error: unsupported figure property: %1").arg(prop);
