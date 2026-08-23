@@ -90,6 +90,8 @@ private:
   void connectSignals();
 
   void runCommand(const QString& cmd, bool addToHistory = true);
+  QString translateShorthandLines(const QString& text) const;
+  QString translateShorthandLine(const QString& line) const;
   QString rewriteSelectedRangeCaptures(const QString& cmd) const;
   QString selectedRangeCaptureExpression(const QString& varName) const;
   bool tryHandleGraphicsCommand(const QString& cmd, QString& output);

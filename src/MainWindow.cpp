@@ -2057,7 +2057,7 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 
 void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
-  QString actual = cmd;
+  QString actual = translateShorthandLines(cmd);
   lastStartedAsyncRecordHandle_ = 0;
   lastStartedAsyncRecordCallback_.clear();
   // The optional empty-arg group must not be followed by \b: after matching "()" the next
@@ -2203,6 +2203,61 @@ void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
   refreshVariables();
   refreshDebugView();
   reconcileScopedWindows();
+}
+
+QString MainWindow::translateShorthandLines(const QString& text) const {
+  const QStringList lines = text.split(QLatin1Char('\n'));
+  QStringList result;
+  result.reserve(lines.size());
+  for (const QString& line : lines) {
+    if (line.trimmed().startsWith(QStringLiteral("//"))) {
+      result.append(translateShorthandLine(line));
+    } else {
+      result.append(line);
+    }
+  }
+  return result.join(QLatin1Char('\n'));
+}
+
+// Shorthand grammar: "// name word1 [word2 ...]" avoids auxe's quoting
+// requirement in the console. word1 ending in "(" selects function-call
+// mode (word2+ become comma-separated args); otherwise word1+ are joined
+// with "++" and assigned directly. Any word starting with "$" is emitted
+// bare (a variable reference or number literal, per auxe's own grammar);
+// auxe itself resolves which one it is and reports any type errors, so
+// there is nothing to distinguish here on the AUXLAB2 side.
+QString MainWindow::translateShorthandLine(const QString& line) const {
+  const QString content = line.trimmed().mid(2);
+  const QStringList words = content.split(QRegularExpression(R"(\s+)"), Qt::SkipEmptyParts);
+  if (words.size() < 2) {
+    return line;  // not a shorthand assignment; leave as an ordinary auxe comment
+  }
+
+  const QString& name = words.at(0);
+  auto translateWord = [](const QString& word) -> QString {
+    if (word.size() > 1 && word.startsWith(QLatin1Char('$'))) {
+      return word.mid(1);
+    }
+    QString escaped = word;
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    return QLatin1Char('"') + escaped + QLatin1Char('"');
+  };
+
+  const QString& second = words.at(1);
+  if (second.size() > 1 && second.endsWith(QLatin1Char('('))) {
+    const QString funcName = second.left(second.size() - 1);
+    QStringList args;
+    for (int i = 2; i < words.size(); ++i) {
+      args.append(translateWord(words.at(i)));
+    }
+    return QStringLiteral("%1=%2(%3)").arg(name, funcName, args.join(QStringLiteral(", ")));
+  }
+
+  QStringList pieces;
+  for (int i = 1; i < words.size(); ++i) {
+    pieces.append(translateWord(words.at(i)));
+  }
+  return QStringLiteral("%1=%2").arg(name, pieces.join(QStringLiteral("++")));
 }
 
 QString MainWindow::rewriteSelectedRangeCaptures(const QString& cmd) const {
