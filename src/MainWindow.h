@@ -128,7 +128,7 @@ private:
   void openSignalGraphForPath(const QString& path);
   SignalGraphWindow* createEmptyFigureWindow(const QString& title, const QRect& geometry = QRect());
   SignalGraphWindow* createSignalFigureWindow(const QString& title,
-                                             const SignalData& data,
+                                             const SignalDataPtr& data,
                                              bool namedPlot,
                                              const QString& sourcePath,
                                              bool variableBacked);

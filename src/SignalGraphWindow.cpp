@@ -198,7 +198,7 @@ QString formatSecondsCompact(double sec) {
 }  // namespace
 
 SignalGraphWindow::SignalGraphWindow(const QString& varName,
-                                     const SignalData& data,
+                                     const SignalDataPtr& data,
                                      CreationOptions options,
                                      QWidget* parent,
                                      FftProvider fftProvider)
@@ -208,7 +208,7 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName,
       options_(options),
       graphics_(GraphicsFigureModel::createSignalFigure(
           options.title.isEmpty() ? QString("Signal Graph - %1").arg(varName_) : options.title,
-          data,
+          *data,
           options.namedPlot,
           options.sourcePath)),
       fftProvider_(std::move(fftProvider)) {
@@ -218,10 +218,10 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName,
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
 
-  if (!data_.channels.empty()) {
+  if (!data_->channels.empty()) {
     viewStart_ = 0;
-    viewLen_ = std::max(1, totalTimelineSamples(data_));
-    fftPaneOffsets_.assign(data_.channels.size(), QPoint(0, 0));
+    viewLen_ = std::max(1, totalTimelineSamples(*data_));
+    fftPaneOffsets_.assign(data_->channels.size(), QPoint(0, 0));
     rangeHistory_.push_back({viewStart_, viewStart_ + viewLen_});
     rangeHistoryIndex_ = 0;
   }
@@ -272,15 +272,15 @@ void SignalGraphWindow::setWorkspaceActive(bool active) {
   update();
 }
 
-void SignalGraphWindow::updateData(const SignalData& data) {
-  const int oldTotalLen = totalTimelineSamples(data_);
+void SignalGraphWindow::updateData(const SignalDataPtr& data) {
+  const int oldTotalLen = totalTimelineSamples(*data_);
   const int oldViewEnd = viewStart_ + std::max(0, viewLen_);
   const bool wasNearFullView =
       (oldTotalLen > 0 && viewStart_ <= 1 && oldViewEnd >= oldTotalLen - 1);
   const bool hadNoUsablePriorView = (oldTotalLen <= 0 || viewLen_ <= 0);
 
   data_ = data;
-  graphics_.updateSignalData(data_);
+  graphics_.updateSignalData(*data_);
   setWindowTitle(graphics_.figure().title);
   ++dataSerial_;
   fftComputed_ = false;
@@ -288,8 +288,8 @@ void SignalGraphWindow::updateData(const SignalData& data) {
   fftViewStart_ = -1;
   fftViewLen_ = -1;
   fftDataSerial_ = -1;
-  if (!data_.channels.empty()) {
-    const int totalLen = std::max(1, totalTimelineSamples(data_));
+  if (!data_->channels.empty()) {
+    const int totalLen = std::max(1, totalTimelineSamples(*data_));
     if (wasNearFullView || hadNoUsablePriorView) {
       // Keep showing the whole signal when user was viewing full extent.
       viewStart_ = 0;
@@ -302,10 +302,10 @@ void SignalGraphWindow::updateData(const SignalData& data) {
     rangeHistory_.push_back({viewStart_, viewStart_ + viewLen_});
     rangeHistoryIndex_ = 0;
   }
-  if (fftPaneOffsets_.size() < data_.channels.size()) {
-    fftPaneOffsets_.resize(data_.channels.size(), QPoint(0, 0));
-  } else if (fftPaneOffsets_.size() > data_.channels.size()) {
-    fftPaneOffsets_.resize(data_.channels.size());
+  if (fftPaneOffsets_.size() < data_->channels.size()) {
+    fftPaneOffsets_.resize(data_->channels.size(), QPoint(0, 0));
+  } else if (fftPaneOffsets_.size() > data_->channels.size()) {
+    fftPaneOffsets_.resize(data_->channels.size());
   }
   if (showFftOverlay_) {
     ensureFftData();
@@ -443,11 +443,11 @@ std::optional<SignalGraphWindow::SelectedRange> SignalGraphWindow::selectedRange
   SelectedRange out;
   out.start = sel.start;
   out.end = sel.end;
-  out.isAudio = data_.isAudio;
-  out.sampleRate = data_.sampleRate;
+  out.isAudio = data_->isAudio;
+  out.sampleRate = data_->sampleRate;
   out.xStart = (*xRange)[0];
   out.xEnd = (*xRange)[1];
-  out.endsAtSignalEnd = sel.end >= std::max(0, totalTimelineSamples(data_) - 1);
+  out.endsAtSignalEnd = sel.end >= std::max(0, totalTimelineSamples(*data_) - 1);
   return out;
 }
 
@@ -521,7 +521,7 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
   if (audioSink_ && audioSink_->state() != QAudio::StoppedState && workspaceActive_) {
     const int span = std::max(1, playingRange_.end - playingRange_.start);
     const qint64 processedUs = audioSink_->processedUSecs();
-    double frac = (processedUs * 1e-6) * data_.sampleRate / static_cast<double>(span);
+    double frac = (processedUs * 1e-6) * data_->sampleRate / static_cast<double>(span);
     frac = std::clamp(frac, 0.0, 1.0);
     int sample = playingRange_.start + static_cast<int>(span * frac);
     sample = std::clamp(sample, viewStart_, std::max(viewStart_, viewStart_ + viewLen_ - 1));
@@ -541,14 +541,14 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
 }
 
 SignalGraphWindow::Range SignalGraphWindow::clampRange(const Range& range) const {
-  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  const int totalLen = std::max(1, totalTimelineSamples(*data_));
   const int start = std::clamp(range.start, 0, std::max(0, totalLen - 1));
   const int end = std::clamp(range.end, start + 1, totalLen);
   return {start, end};
 }
 
 SignalGraphWindow::Range SignalGraphWindow::fullRange() const {
-  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  const int totalLen = std::max(1, totalTimelineSamples(*data_));
   return {0, totalLen};
 }
 
@@ -569,7 +569,7 @@ void SignalGraphWindow::recordRangeHistory(const Range& range) {
 }
 
 void SignalGraphWindow::applyRange(const Range& range, bool recordHistory) {
-  if (data_.channels.empty()) {
+  if (data_->channels.empty()) {
     return;
   }
   const Range clamped = clampRange(range);
@@ -603,7 +603,7 @@ void SignalGraphWindow::anchorRangeStartToZero() {
 }
 
 void SignalGraphWindow::anchorRangeEndToSignalEnd() {
-  const int totalLen = std::max(1, totalTimelineSamples(data_));
+  const int totalLen = std::max(1, totalTimelineSamples(*data_));
   const int currentLen = std::max(1, viewLen_);
   applyRange({totalLen - currentLen, totalLen});
 }
@@ -684,14 +684,14 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
       break;
     case Qt::Key_F4:
       if (event->modifiers() & Qt::ShiftModifier) {
-        fftPaneOffsets_.assign(data_.channels.size(), QPoint(0, 0));
+        fftPaneOffsets_.assign(data_->channels.size(), QPoint(0, 0));
         update();
       } else {
         toggleFftOverlay();
       }
       break;
     case Qt::Key_Space:
-      if (data_.isAudio) {
+      if (data_->isAudio) {
         togglePlayPause();
       }
       break;
@@ -720,7 +720,7 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
 
   if (showFftOverlay_) {
     const QRect plot = plotRect();
-    const int nChannels = static_cast<int>(data_.channels.size());
+    const int nChannels = static_cast<int>(data_->channels.size());
     const auto panes = buildFftPaneLayouts(plot, nChannels);
     for (const auto& pane : panes) {
       if (pane.leftMargin.contains(event->pos())) {
@@ -846,7 +846,7 @@ QRect SignalGraphWindow::axesRectForPlot(const GraphicsAxesHandle& axes, const Q
 void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes, const GraphicsLineHandle& line) {
   const QVector<double>& xdata = line.xdata;
   const QVector<double>& ydata = line.ydata;
-  const bool deriveAudioX = data_.isAudio && data_.sampleRate > 0 && xdata.isEmpty();
+  const bool deriveAudioX = data_->isAudio && data_->sampleRate > 0 && xdata.isEmpty();
   const bool manualAudioX = deriveAudioX && !axes.autoXLim;
   if (ydata.isEmpty() || viewLen_ <= 0) {
     return;
@@ -867,8 +867,8 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
   if (deriveAudioX) {
     const int totalLen = ydata.size();
     if (manualAudioX) {
-      const double sampleRate = static_cast<double>(data_.sampleRate);
-      const double t0 = data_.startTimeSec;
+      const double sampleRate = static_cast<double>(data_->sampleRate);
+      const double t0 = data_->startTimeSec;
       from = std::clamp(static_cast<int>(std::floor((xmin - t0) * sampleRate)), 0, std::max(0, totalLen - 1));
       to = std::clamp(static_cast<int>(std::ceil((xmax - t0) * sampleRate)) + 1, from + 1, totalLen);
     } else {
@@ -910,7 +910,7 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
       double px = 0.0;
       if (deriveAudioX) {
         if (manualAudioX) {
-          const double t = data_.startTimeSec + static_cast<double>(i) / static_cast<double>(data_.sampleRate);
+          const double t = data_->startTimeSec + static_cast<double>(i) / static_cast<double>(data_->sampleRate);
           const double xNorm = (t - xmin) / xspan;
           px = area.left() + xNorm * area.width();
         } else {
@@ -951,11 +951,11 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
       int s0 = from;
       int s1 = to;
       if (manualAudioX) {
-        const double sampleRate = static_cast<double>(data_.sampleRate);
+        const double sampleRate = static_cast<double>(data_->sampleRate);
         const double binStart = xmin + (xspan * x) / width;
         const double binEnd = xmin + (xspan * (x + 1)) / width;
-        const double sampleStart = (binStart - data_.startTimeSec) * sampleRate;
-        const double sampleEnd = (binEnd - data_.startTimeSec) * sampleRate;
+        const double sampleStart = (binStart - data_->startTimeSec) * sampleRate;
+        const double sampleEnd = (binEnd - data_->startTimeSec) * sampleRate;
         if (sampleEnd <= from || sampleStart >= to) {
           continue;
         }
@@ -1019,7 +1019,7 @@ void SignalGraphWindow::drawLine(QPainter& p, const QRect& area, const GraphicsA
 }
 
 void SignalGraphWindow::cycleStereoMode() {
-  if (data_.channels.size() < 2) {
+  if (data_->channels.size() < 2) {
     return;
   }
   switch (graphics_.stereoDisplayMode()) {
@@ -1039,10 +1039,10 @@ void SignalGraphWindow::cycleStereoMode() {
 }
 
 void SignalGraphWindow::zoomIn() {
-  if (data_.channels.empty()) {
+  if (data_->channels.empty()) {
     return;
   }
-  const int totalLen = totalTimelineSamples(data_);
+  const int totalLen = totalTimelineSamples(*data_);
   if (totalLen <= 1) {
     return;
   }
@@ -1057,21 +1057,21 @@ void SignalGraphWindow::zoomIn() {
 }
 
 void SignalGraphWindow::zoomOut() {
-  if (data_.channels.empty()) {
+  if (data_->channels.empty()) {
     return;
   }
-  const int totalLen = totalTimelineSamples(data_);
+  const int totalLen = totalTimelineSamples(*data_);
   const int nextLen = std::min(totalLen, static_cast<int>(viewLen_ * 1.8));
   const int nextStart = std::clamp(viewStart_, 0, std::max(0, totalLen - nextLen));
   applyRange({nextStart, nextStart + nextLen});
 }
 
 void SignalGraphWindow::panView(int direction) {
-  if (data_.channels.empty() || direction == 0) {
+  if (data_->channels.empty() || direction == 0) {
     return;
   }
 
-  const int totalLen = totalTimelineSamples(data_);
+  const int totalLen = totalTimelineSamples(*data_);
   const int currentLen = std::clamp(viewLen_, 1, std::max(1, totalLen));
   if (totalLen <= currentLen) {
     return;  // Full view: no panning room.
@@ -1119,15 +1119,15 @@ void SignalGraphWindow::startPlaybackForRange(const Range& range) {
 }
 
 void SignalGraphWindow::startPlaybackFromSample(const Range& range, int startSample, bool startPaused) {
-  if (!data_.isAudio || data_.channels.empty() || data_.sampleRate <= 0) {
+  if (!data_->isAudio || data_->channels.empty() || data_->sampleRate <= 0) {
     return;
   }
 
   stopPlayback();
 
-  const int offset = timelineOffsetSamples(data_);
-  const int dataLen = static_cast<int>(data_.channels.front().samples.size());
-  const int totalTimeline = totalTimelineSamples(data_);
+  const int offset = timelineOffsetSamples(*data_);
+  const int dataLen = static_cast<int>(data_->channels.front().samples.size());
+  const int totalTimeline = totalTimelineSamples(*data_);
   if (dataLen <= 0 || totalTimeline <= 0) {
     return;
   }
@@ -1140,8 +1140,8 @@ void SignalGraphWindow::startPlaybackFromSample(const Range& range, int startSam
   playingRange_ = {startTimeline, endTimeline};
 
   QAudioFormat fmt;
-  fmt.setSampleRate(data_.sampleRate);
-  fmt.setChannelCount(static_cast<int>(std::min<size_t>(2, data_.channels.size())));
+  fmt.setSampleRate(data_->sampleRate);
+  fmt.setChannelCount(static_cast<int>(std::min<size_t>(2, data_->channels.size())));
   fmt.setSampleFormat(QAudioFormat::Int16);
 
   const int chCount = fmt.channelCount();
@@ -1152,7 +1152,7 @@ void SignalGraphWindow::startPlaybackFromSample(const Range& range, int startSam
   for (int ti = startTimeline; ti < endTimeline; ++ti) {
     const int di = ti - offset;
     for (int c = 0; c < chCount; ++c) {
-      const auto& src = data_.channels[static_cast<size_t>(c)].samples;
+      const auto& src = data_->channels[static_cast<size_t>(c)].samples;
       double v = 0.0;
       if (di >= 0 && di < static_cast<int>(src.size())) {
         v = std::clamp(src[static_cast<size_t>(di)], -1.0, 1.0);
@@ -1252,10 +1252,10 @@ std::optional<SignalGraphWindow::Range> SignalGraphWindow::sampleRangeForXRange(
 
   const double lo = std::min(xStart, xEnd);
   const double hi = std::max(xStart, xEnd);
-  if (data_.isAudio && data_.sampleRate > 0) {
-    const double fs = static_cast<double>(data_.sampleRate);
-    const int start = static_cast<int>(std::llround((lo - data_.startTimeSec) * fs));
-    const int end = static_cast<int>(std::llround((hi - data_.startTimeSec) * fs));
+  if (data_->isAudio && data_->sampleRate > 0) {
+    const double fs = static_cast<double>(data_->sampleRate);
+    const int start = static_cast<int>(std::llround((lo - data_->startTimeSec) * fs));
+    const int end = static_cast<int>(std::llround((hi - data_->startTimeSec) * fs));
     return Range{start, end};
   }
 
@@ -1300,10 +1300,10 @@ std::optional<std::array<double, 2>> SignalGraphWindow::xRangeForSampleRange(std
   }
 
   const Range clamped = clampRange(range);
-  if (data_.isAudio && data_.sampleRate > 0) {
-    const double fs = static_cast<double>(data_.sampleRate);
-    return std::array<double, 2>{data_.startTimeSec + static_cast<double>(clamped.start) / fs,
-                                 data_.startTimeSec + static_cast<double>(clamped.end) / fs};
+  if (data_->isAudio && data_->sampleRate > 0) {
+    const double fs = static_cast<double>(data_->sampleRate);
+    return std::array<double, 2>{data_->startTimeSec + static_cast<double>(clamped.start) / fs,
+                                 data_->startTimeSec + static_cast<double>(clamped.end) / fs};
   }
 
   const QVector<double>& xdata = line->xdata;
@@ -1323,7 +1323,7 @@ int SignalGraphWindow::currentPlaybackSample() const {
   }
   const int span = std::max(1, playingRange_.end - playingRange_.start);
   const qint64 processedUs = audioSink_->processedUSecs();
-  double frac = (processedUs * 1e-6) * data_.sampleRate / static_cast<double>(span);
+  double frac = (processedUs * 1e-6) * data_->sampleRate / static_cast<double>(span);
   frac = std::clamp(frac, 0.0, 1.0);
   int sample = playingRange_.start + static_cast<int>(span * frac);
   sample = std::clamp(sample, playingRange_.start, std::max(playingRange_.start, playingRange_.end - 1));
@@ -1403,8 +1403,8 @@ void SignalGraphWindow::updateYRange() {
     }
   };
 
-  if (data_.isAudio) {
-    if (data_.channels.empty() || data_.channels.front().samples.empty()) {
+  if (data_->isAudio) {
+    if (data_->channels.empty() || data_->channels.front().samples.empty()) {
       yMin_ = -1.0;
       yMax_ = 1.0;
       applyAutoYLimToAllAxes({-1.0, 1.0});
@@ -1503,11 +1503,11 @@ void SignalGraphWindow::syncVisibleXRangeToAxes() {
       continue;
     }
 
-    if (data_.isAudio && data_.sampleRate > 0) {
-      const double x0 = data_.startTimeSec + static_cast<double>(viewStart_) / static_cast<double>(data_.sampleRate);
-      const double x1 = data_.startTimeSec +
+    if (data_->isAudio && data_->sampleRate > 0) {
+      const double x0 = data_->startTimeSec + static_cast<double>(viewStart_) / static_cast<double>(data_->sampleRate);
+      const double x1 = data_->startTimeSec +
                         static_cast<double>(viewStart_ + std::max(1, viewLen_) - 1) /
-                            static_cast<double>(data_.sampleRate);
+                            static_cast<double>(data_->sampleRate);
       axes->xlim = {x0, x1};
       continue;
     }
@@ -1568,7 +1568,7 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       const QRect axesRect = axesRectForPlot(axes, plot);
       const int xTickCount = 7;
       const int yTickCount = 5;
-      const bool xIsTime = data_.isAudio && data_.sampleRate > 0;
+      const bool xIsTime = data_->isAudio && data_->sampleRate > 0;
       const double xStartVal = axes.xlim[0];
       const double xEndVal = axes.xlim[1];
       const double xSpan = std::max(1e-12, xEndVal - xStartVal);
@@ -1717,9 +1717,9 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverFftFreqHz_ = 0.0;
   hoverXCoord_ = 0.0;
 
-  if (showFftOverlay_ && data_.isAudio && data_.sampleRate > 0) {
+  if (showFftOverlay_ && data_->isAudio && data_->sampleRate > 0) {
     ensureFftData();
-    const int nChannels = std::min(static_cast<int>(data_.channels.size()), static_cast<int>(fftDb_.size()));
+    const int nChannels = std::min(static_cast<int>(data_->channels.size()), static_cast<int>(fftDb_.size()));
     const auto panes = buildFftPaneLayouts(plotRect(), nChannels);
     for (const auto& pane : panes) {
       if (!pane.inner.contains(pt)) {
@@ -1729,7 +1729,7 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
       const double y01 = std::clamp((pt.y() - pane.inner.top()) / static_cast<double>(std::max(1, pane.inner.height())), 0.0, 1.0);
       hoverInFft_ = true;
       hoverFftValue_ = -80.0 * y01; // top=0 dB, bottom=-80 dB
-      hoverFftFreqHz_ = x01 * (data_.sampleRate * 0.5);
+      hoverFftFreqHz_ = x01 * (data_->sampleRate * 0.5);
       hoverActive_ = true;
       hoverSample_ = -1;
       return;
@@ -1761,9 +1761,9 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverActive_ = true;
   const double x01 = std::clamp((pt.x() - axesRect.left()) / static_cast<double>(std::max(1, axesRect.width())), 0.0, 1.0);
   hoverXCoord_ = axes->xlim[0] + x01 * (axes->xlim[1] - axes->xlim[0]);
-  if (data_.isAudio && data_.sampleRate > 0) {
-    const double samplePos = (hoverXCoord_ - data_.startTimeSec) * static_cast<double>(data_.sampleRate);
-    hoverSample_ = std::clamp(static_cast<int>(std::llround(samplePos)), 0, std::max(0, totalTimelineSamples(data_) - 1));
+  if (data_->isAudio && data_->sampleRate > 0) {
+    const double samplePos = (hoverXCoord_ - data_->startTimeSec) * static_cast<double>(data_->sampleRate);
+    hoverSample_ = std::clamp(static_cast<int>(std::llround(samplePos)), 0, std::max(0, totalTimelineSamples(*data_) - 1));
   } else {
     hoverSample_ = xToSample(pt);
   }
@@ -1781,8 +1781,8 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
 }
 
 QString SignalGraphWindow::formatTimeValue(int sample, bool withSuffix) const {
-  if (data_.isAudio && data_.sampleRate > 0) {
-    const double sec = static_cast<double>(sample) / static_cast<double>(data_.sampleRate);
+  if (data_->isAudio && data_->sampleRate > 0) {
+    const double sec = static_cast<double>(sample) / static_cast<double>(data_->sampleRate);
     const QString body = formatSecondsCompact(sec);
     if (sec >= 60.0) {
       return body;
@@ -1810,10 +1810,10 @@ QString SignalGraphWindow::formatTimeValue(int sample, bool withSuffix) const {
 }
 
 QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
-  if (!data_.isAudio) {
+  if (!data_->isAudio) {
     return {};
   }
-  if (data_.channels.empty()) {
+  if (data_->channels.empty()) {
     return "[dBRMS] -";
   }
   if (cachedRmsDataSerial_ == dataSerial_ && cachedRmsRange_.start == range.start &&
@@ -1821,19 +1821,19 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
     return cachedRmsText_;
   }
 
-  const int totalTimeline = std::max(1, totalTimelineSamples(data_));
+  const int totalTimeline = std::max(1, totalTimelineSamples(*data_));
   const int start = std::clamp(range.start, 0, totalTimeline - 1);
   const int end = std::clamp(range.end, start + 1, totalTimeline);
-  const int offset = timelineOffsetSamples(data_);
+  const int offset = timelineOffsetSamples(*data_);
 
   QString out = "[dBRMS]";
-  for (size_t idx = 0; idx < data_.channels.size(); ++idx) {
-    const auto& ch = data_.channels[idx];
+  for (size_t idx = 0; idx < data_->channels.size(); ++idx) {
+    const auto& ch = data_->channels[idx];
     const int d0 = std::max(0, start - offset);
     const int d1 = std::min(static_cast<int>(ch.samples.size()), end - offset);
     const bool isFullChannel = d0 == 0 && d1 == static_cast<int>(ch.samples.size());
-    if (isFullChannel && idx < data_.fullRmsDb.size()) {
-      const double rmsDb = data_.fullRmsDb[idx];
+    if (isFullChannel && idx < data_->fullRmsDb.size()) {
+      const double rmsDb = data_->fullRmsDb[idx];
       if (std::isinf(rmsDb)) {
         out += rmsDb > 0 ? " inf" : " -inf";
       } else {
@@ -1866,7 +1866,7 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
 }
 
 void SignalGraphWindow::toggleFftOverlay() {
-  if (!data_.isAudio || data_.channels.empty() || data_.sampleRate <= 0) {
+  if (!data_->isAudio || data_->channels.empty() || data_->sampleRate <= 0) {
     showFftOverlay_ = false;
     return;
   }
@@ -1938,7 +1938,7 @@ QPoint SignalGraphWindow::clampFftPaneOffset(const QRect& plot, const QPoint& de
 }
 
 void SignalGraphWindow::drawFftOverlays(QPainter& p, const QRect& plot) {
-  if (!showFftOverlay_ || !workspaceActive_ || !data_.isAudio || data_.sampleRate <= 0) {
+  if (!showFftOverlay_ || !workspaceActive_ || !data_->isAudio || data_->sampleRate <= 0) {
     return;
   }
   ensureFftData();
@@ -1946,7 +1946,7 @@ void SignalGraphWindow::drawFftOverlays(QPainter& p, const QRect& plot) {
     return;
   }
 
-  const int nChannels = std::min(static_cast<int>(data_.channels.size()), static_cast<int>(fftDb_.size()));
+  const int nChannels = std::min(static_cast<int>(data_->channels.size()), static_cast<int>(fftDb_.size()));
   if (nChannels <= 0) {
     return;
   }
@@ -2002,7 +2002,7 @@ void SignalGraphWindow::drawFftOverlays(QPainter& p, const QRect& plot) {
     p.drawText(QRect(inner.left() - 24, inner.bottom() - 6, 22, 12), Qt::AlignRight | Qt::AlignVCenter, "-80");
     p.drawText(QRect(inner.left(), inner.bottom() + 2, 40, 12), Qt::AlignLeft | Qt::AlignVCenter, "0");
     p.drawText(QRect(inner.right() - 56, inner.bottom() + 2, 56, 12), Qt::AlignRight | Qt::AlignVCenter,
-               QString("%1").arg(data_.sampleRate / 2));
+               QString("%1").arg(data_->sampleRate / 2));
     p.drawText(QRect(inner.left() - 24, inner.bottom() + 10, 48, 12), Qt::AlignLeft | Qt::AlignVCenter, "[Hz]");
   }
 }
@@ -2015,7 +2015,7 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
 
   const Range sel = normalizedSelection();
   const bool hasSel = sel.end > sel.start;
-  const int totalTimeline = std::max(1, totalTimelineSamples(data_));
+  const int totalTimeline = std::max(1, totalTimelineSamples(*data_));
   const Range rmsRange = hasSel ? sel : Range{0, totalTimeline};
 
   const QString mouseText =
@@ -2028,10 +2028,10 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
                                                  : QString());
   const auto* axes = graphics_.leftChannelAxes();
   const QString viewStartText =
-      axes ? (data_.isAudio ? formatSecondsCompact(axes->xlim[0]) + "s" : QString::number(axes->xlim[0], 'g', 6))
+      axes ? (data_->isAudio ? formatSecondsCompact(axes->xlim[0]) + "s" : QString::number(axes->xlim[0], 'g', 6))
            : formatTimeValue(viewStart_, true);
   const QString viewEndText =
-      axes ? (data_.isAudio ? formatSecondsCompact(axes->xlim[1]) + "s" : QString::number(axes->xlim[1], 'g', 6))
+      axes ? (data_->isAudio ? formatSecondsCompact(axes->xlim[1]) + "s" : QString::number(axes->xlim[1], 'g', 6))
            : formatTimeValue(viewStart_ + std::max(1, viewLen_) - 1, true);
   const QString selStartText = hasSel ? formatTimeValue(sel.start, true) : QString();
   const QString selEndText = hasSel ? formatTimeValue(sel.end, true) : QString();

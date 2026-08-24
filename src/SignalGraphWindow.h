@@ -44,7 +44,7 @@ public:
   };
 
   SignalGraphWindow(const QString& varName,
-                    const SignalData& data,
+                    const SignalDataPtr& data,
                     CreationOptions options = CreationOptions(),
                     QWidget* parent = nullptr,
                     FftProvider fftProvider = {});
@@ -52,7 +52,7 @@ public:
 
   QString varName() const;
   void setWorkspaceActive(bool active);
-  void updateData(const SignalData& data);
+  void updateData(const SignalDataPtr& data);
   std::uint64_t addAxes(const std::array<double, 4>& pos);
   std::uint64_t addLine(std::uint64_t axesId, const QVector<double>& xdata, const QVector<double>& ydata);
   std::uint64_t addText(std::uint64_t parentId, double x, double y, const QString& text);
@@ -140,7 +140,7 @@ private:
   void syncFigurePosFromWidget();
 
   QString varName_;
-  SignalData data_;
+  SignalDataPtr data_;
   CreationOptions options_;
   GraphicsFigureModel graphics_;
   bool workspaceActive_ = true;

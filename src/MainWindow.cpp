@@ -1001,9 +1001,9 @@ std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
 
   if (!targetWindow) {
     targetWindow = createSignalFigureWindow(
-        graphicsManager_.nextUnnamedFigureTitle(), *graphSignalDataForDisplay(sig), false, QString(), false);
+        graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(sig), false, QString(), false);
   } else {
-    targetWindow->updateData(*graphSignalDataForDisplay(sig));
+    targetWindow->updateData(graphSignalDataForDisplay(sig));
     focusWindow(targetWindow);
     graphicsManager_.markFocused(targetWindow);
   }
@@ -1089,7 +1089,7 @@ std::uint64_t MainWindow::createGraphicsLine(std::uint64_t targetHandleId,
   }
 
   if (!targetWindow) {
-    SignalData emptyData;
+    const auto emptyData = std::make_shared<const SignalData>();
     targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), emptyData, false, QString(), false);
     if (!targetWindow) {
       err = "Failed to create figure window for line().";
@@ -3100,9 +3100,9 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
     if (!targetWindow) {
       targetWindow = createSignalFigureWindow(
-          graphicsManager_.nextUnnamedFigureTitle(), *graphSignalDataForDisplay(sig), false, QString(), false);
+          graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(sig), false, QString(), false);
     } else {
-      targetWindow->updateData(*graphSignalDataForDisplay(sig));
+      targetWindow->updateData(graphSignalDataForDisplay(sig));
       focusWindow(targetWindow);
       graphicsManager_.markFocused(targetWindow);
     }
@@ -3245,7 +3245,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
 
     if (!targetWindow) {
-      SignalData emptyData;
+      const auto emptyData = std::make_shared<const SignalData>();
       targetWindow = createSignalFigureWindow(graphicsManager_.nextUnnamedFigureTitle(), emptyData, false, QString(), false);
       if (const auto* currentAxes = targetWindow->graphicsModel().currentAxes()) {
         targetAxesId = currentAxes->common.id;
@@ -4152,7 +4152,7 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
 
   const auto currentScope = engine_.activeContext();
   if (auto* existing = findSignalGraphWindow(path, currentScope)) {
-    existing->updateData(*graphData);
+    existing->updateData(graphData);
     focusWindow(existing);
     graphicsManager_.markFocused(existing);
     return;
@@ -4164,7 +4164,7 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
   options.sourcePath = path;
 
   auto* w = new SignalGraphWindow(
-      path, *graphData, options, nullptr,
+      path, graphData, options, nullptr,
       [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Graph);
@@ -4173,7 +4173,7 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
 }
 
 SignalGraphWindow* MainWindow::createEmptyFigureWindow(const QString& title, const QRect& geometry) {
-  SignalData emptyData;
+  const auto emptyData = std::make_shared<const SignalData>();
   SignalGraphWindow::CreationOptions options;
   options.title = title;
   options.namedPlot = false;
@@ -4190,7 +4190,7 @@ SignalGraphWindow* MainWindow::createEmptyFigureWindow(const QString& title, con
 }
 
 SignalGraphWindow* MainWindow::createSignalFigureWindow(const QString& title,
-                                                       const SignalData& data,
+                                                       const SignalDataPtr& data,
                                                        bool namedPlot,
                                                        const QString& sourcePath,
                                                        bool variableBacked) {
@@ -5761,7 +5761,7 @@ void MainWindow::reconcileScopedWindows() {
       if (it->scope == currentScope) {
         auto sig = engine_.getSignalData(it->varName.toStdString());
         if (sig) {
-          g->updateData(*graphSignalDataForDisplay(sig));
+          g->updateData(graphSignalDataForDisplay(sig));
         }
       }
     } else {
