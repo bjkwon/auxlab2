@@ -81,6 +81,7 @@ public:
   std::vector<VarSnapshot> listStructMembers(const std::string& path) const;
   std::vector<VarSnapshot> listCellMembers(const std::string& path) const;
   std::optional<SignalData> getSignalData(const std::string& varName) const;
+  bool hasSignalData(const std::string& varName) const;
   std::optional<QVector<double>> getNumericVector(const std::string& varName) const;
   std::optional<double> getScalarValue(const std::string& varName) const;
   std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;

@@ -5896,8 +5896,7 @@ void MainWindow::noteScopedWindowFocus(QWidget* window) {
 }
 
 bool MainWindow::variableSupportsSignalDisplay(const QString& varName) const {
-  auto sig = engine_.getSignalData(varName.toStdString());
-  return sig.has_value();
+  return engine_.hasSignalData(varName.toStdString());
 }
 
 bool MainWindow::variableIsAudio(const QString& varName) const {

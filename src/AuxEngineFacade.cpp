@@ -818,6 +818,20 @@ std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varN
   return buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
 }
 
+bool AuxEngineFacade::hasSignalData(const std::string& varName) const {
+  auxContext* ctx = activeCtx_;
+  if (!ctx) {
+    return false;
+  }
+
+  ScopedPathBinding binding;
+  auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
+  if (!obj) {
+    return false;
+  }
+  return aux_num_channels(obj) > 0;
+}
+
 std::optional<QVector<double>> AuxEngineFacade::getNumericVector(const std::string& varName) const {
   auxContext* ctx = activeCtx_;
   if (!ctx) {
