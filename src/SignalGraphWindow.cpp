@@ -813,6 +813,8 @@ void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
         } else {
           axesSelectionRanges_[selectingAxesId_] = range;
         }
+      } else if (graphics_.isNamedPlot()) {
+        axesSelectionRanges_.clear();
       } else {
         axesSelectionRanges_.erase(selectingAxesId_);
       }
@@ -1646,18 +1648,20 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       for (const auto* line : graphics_.linesForAxes(axes.common.id)) {
         drawLine(p, axesRect, axes, *line);
       }
-      p.setPen(QColor(36, 36, 36));
-      for (double tick : xTicks) {
-        const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
-        const int x = axesRect.left() + static_cast<int>(std::llround(frac * axesRect.width()));
-        p.drawLine(x, axesRect.bottom(), x, axesRect.bottom() + 4);
-        QString label;
-        if (xIsTime) {
-          label = formatSecondsCompact(tick);
-        } else {
-          label = QString::number(static_cast<int>(std::llround(tick)));
+      if (axes.showXTickLabels) {
+        p.setPen(QColor(36, 36, 36));
+        for (double tick : xTicks) {
+          const double frac = std::clamp((tick - xStartVal) / std::max(1e-12, xSpan), 0.0, 1.0);
+          const int x = axesRect.left() + static_cast<int>(std::llround(frac * axesRect.width()));
+          p.drawLine(x, axesRect.bottom(), x, axesRect.bottom() + 4);
+          QString label;
+          if (xIsTime) {
+            label = formatSecondsCompact(tick);
+          } else {
+            label = QString::number(static_cast<int>(std::llround(tick)));
+          }
+          p.drawText(QRect(x - 42, axesRect.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
         }
-        p.drawText(QRect(x - 42, axesRect.bottom() + 7, 84, 16), Qt::AlignHCenter | Qt::AlignTop, label);
       }
 
       for (int i = 0; i < yTickCount; ++i) {
@@ -1702,8 +1706,9 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
 }
 
 QRect SignalGraphWindow::plotRect() const {
-  // Reserve bottom area for quick-read status fields.
-  return rect().adjusted(50, 20, -20, -78);
+  // Reserve bottom area for the quick-read status bar; axes margins (see
+  // kDefaultMonoAxesPos et al.) reserve their own tick-label space.
+  return rect().adjusted(6, 6, -6, -30);
 }
 
 void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
@@ -1811,6 +1816,10 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
   if (data_.channels.empty()) {
     return "[dBRMS] -";
   }
+  if (cachedRmsDataSerial_ == dataSerial_ && cachedRmsRange_.start == range.start &&
+      cachedRmsRange_.end == range.end) {
+    return cachedRmsText_;
+  }
 
   const int totalTimeline = std::max(1, totalTimelineSamples(data_));
   const int start = std::clamp(range.start, 0, totalTimeline - 1);
@@ -1818,9 +1827,20 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
   const int offset = timelineOffsetSamples(data_);
 
   QString out = "[dBRMS]";
-  for (const auto& ch : data_.channels) {
+  for (size_t idx = 0; idx < data_.channels.size(); ++idx) {
+    const auto& ch = data_.channels[idx];
     const int d0 = std::max(0, start - offset);
     const int d1 = std::min(static_cast<int>(ch.samples.size()), end - offset);
+    const bool isFullChannel = d0 == 0 && d1 == static_cast<int>(ch.samples.size());
+    if (isFullChannel && idx < data_.fullRmsDb.size()) {
+      const double rmsDb = data_.fullRmsDb[idx];
+      if (std::isinf(rmsDb)) {
+        out += rmsDb > 0 ? " inf" : " -inf";
+      } else {
+        out += QString(" %1").arg(rmsDb, 0, 'f', 1);
+      }
+      continue;
+    }
     if (d1 <= d0) {
       out += " -inf";
       continue;
@@ -1839,6 +1859,9 @@ QString SignalGraphWindow::formatRmsInfo(const Range& range) const {
     const double rmsDb = 20.0 * std::log10(std::sqrt(static_cast<double>(mean))) + kRmsDbOffset;
     out += QString(" %1").arg(rmsDb, 0, 'f', 1);
   }
+  cachedRmsDataSerial_ = dataSerial_;
+  cachedRmsRange_ = range;
+  cachedRmsText_ = out;
   return out;
 }
 

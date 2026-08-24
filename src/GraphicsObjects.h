@@ -61,6 +61,7 @@ struct GraphicsAxesHandle {
   bool xgrid = true;
   bool ygrid = true;
   int logicalChannel = 0;
+  bool showXTickLabels = true;
 };
 
 struct GraphicsLineHandle {

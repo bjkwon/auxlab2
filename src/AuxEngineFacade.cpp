@@ -24,6 +24,10 @@
 #define AUX_CLOSE close
 #endif
 
+namespace {
+constexpr double kRmsDbOffset = 3.0103;
+}  // namespace
+
 std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
   if (!obj) {
     return std::nullopt;
@@ -134,6 +138,24 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
   if (data.isAudio) {
     data.startTimeSec = minStartMs / 1000.0;
   }
+
+  data.fullRmsDb.reserve(data.channels.size());
+  for (const auto& channel : data.channels) {
+    if (channel.samples.empty()) {
+      data.fullRmsDb.push_back(std::numeric_limits<double>::infinity());
+      continue;
+    }
+    long double sumSq = 0.0;
+    for (double v : channel.samples) {
+      sumSq += static_cast<long double>(v) * static_cast<long double>(v);
+    }
+    const long double mean = sumSq / static_cast<long double>(channel.samples.size());
+    if (mean <= 0.0) {
+      data.fullRmsDb.push_back(-std::numeric_limits<double>::infinity());
+    } else {
+      data.fullRmsDb.push_back(20.0 * std::log10(std::sqrt(static_cast<double>(mean))) + kRmsDbOffset);
+    }
+  }
   return data;
 }
 
@@ -144,7 +166,6 @@ constexpr uint16_t kTypeComplex = 0x0060;
 constexpr uint16_t kTypeCell = 0x1000;
 constexpr uint16_t kTypeStrut = 0x2000;
 constexpr uint16_t kTypeHandle = 0x4000;
-constexpr double kRmsDbOffset = 3.0103;
 
 std::string filterCapturedNoise(std::string s) {
   if (s.empty()) {
@@ -414,6 +435,29 @@ std::string formatRmsDb(const AuxObj& obj) {
   return out.str();
 }
 
+}  // namespace
+
+std::string AuxEngineFacade::cachedRmsForObj(const AuxObj& obj) const {
+  const int channels = aux_num_channels(obj);
+  if (channels <= 0) {
+    return {};
+  }
+  std::vector<size_t> lengths(static_cast<size_t>(channels));
+  for (int ch = 0; ch < channels; ++ch) {
+    lengths[static_cast<size_t>(ch)] = aux_flatten_channel_length(obj, ch);
+  }
+
+  auto it = rmsCache_.find(obj);
+  if (it != rmsCache_.end() && it->second.first == lengths) {
+    return it->second.second;
+  }
+
+  std::string rms = formatRmsDb(obj);
+  rmsCache_[obj] = {std::move(lengths), rms};
+  return rms;
+}
+
+namespace {
 std::string readTmpFile(FILE* f) {
   if (!f) {
     return {};
@@ -670,7 +714,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
       snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
-      snap.rms = formatRmsDb(obj);
+      snap.rms = cachedRmsForObj(obj);
     }
     vars.push_back(std::move(snap));
   }
@@ -711,7 +755,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listStructMembers(const std::string& p
       snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
-      snap.rms = formatRmsDb(kv.second);
+      snap.rms = cachedRmsForObj(kv.second);
     }
     out.push_back(std::move(snap));
   }
@@ -753,7 +797,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listCellMembers(const std::string& pat
       snap.preview = structFaceOnlyPreview(snap.preview);
     }
     if (snap.isAudio) {
-      snap.rms = formatRmsDb(obj);
+      snap.rms = cachedRmsForObj(obj);
     }
     out.push_back(std::move(snap));
   }

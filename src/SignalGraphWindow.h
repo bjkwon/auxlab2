@@ -197,4 +197,8 @@ private:
   double cachedYMax_ = 0.0;
   StereoDisplayMode cachedStereoDisplayMode_ = StereoDisplayMode::SplitAxes;
   bool cachedWorkspaceActive_ = true;
+
+  mutable QString cachedRmsText_;
+  mutable Range cachedRmsRange_{-1, -1};
+  mutable int cachedRmsDataSerial_ = -1;
 };

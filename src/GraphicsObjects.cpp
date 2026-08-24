@@ -6,9 +6,9 @@
 #include <limits>
 
 namespace {
-std::array<double, 4> kDefaultMonoAxesPos{0.08, 0.18, 0.86, 0.72};
-std::array<double, 4> kDefaultTopAxesPos{0.08, 0.55, 0.86, 0.35};
-std::array<double, 4> kDefaultBottomAxesPos{0.08, 0.10, 0.86, 0.35};
+std::array<double, 4> kDefaultMonoAxesPos{0.045, 0.09, 0.94, 0.87};
+std::array<double, 4> kDefaultTopAxesPos{0.045, 0.525, 0.94, 0.435};
+std::array<double, 4> kDefaultBottomAxesPos{0.045, 0.09, 0.94, 0.435};
 QColor kDefaultFigureColor(212, 212, 196);
 QColor kDefaultAxesColor(188, 196, 190);
 QColor kDefaultLeftLineColor(28, 62, 178);
@@ -427,11 +427,17 @@ void GraphicsFigureModel::applyStereoLayout() {
     rightIt->common.pos = kDefaultMonoAxesPos;
     leftIt->common.visible = true;
     rightIt->common.visible = false;
+    leftIt->showXTickLabels = true;
+    rightIt->showXTickLabels = true;
   } else {
     leftIt->common.pos = kDefaultTopAxesPos;
     rightIt->common.pos = kDefaultBottomAxesPos;
     leftIt->common.visible = true;
     rightIt->common.visible = true;
+    // Axes are stacked flush against each other, so only the bottom one
+    // (which owns the shared x-axis) draws tick marks/labels.
+    leftIt->showXTickLabels = false;
+    rightIt->showXTickLabels = true;
   }
 }
 

@@ -2,9 +2,11 @@
 
 #include <auxe/auxe.h>
 #include <QVector>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct VarSnapshot {
@@ -40,6 +42,10 @@ struct SignalData {
   int sampleRate = 0;
   double startTimeSec = 0.0;
   std::vector<ChannelData> channels;
+  // RMS in dB over the whole channel, computed once when the signal is loaded
+  // so full-timeline RMS display doesn't need to re-scan the samples. One
+  // entry per channel; +inf for an empty channel, -inf for pure silence.
+  std::vector<double> fullRmsDb;
 };
 
 struct BinaryData {
@@ -109,9 +115,17 @@ public:
   auxDebugAction debugResume(auxDebugAction action, std::string* output = nullptr);
 
 private:
+  std::string cachedRmsForObj(const AuxObj& obj) const;
+
   auxConfig cfg_{};
   auxContext* rootCtx_ = nullptr;
   mutable auxContext* activeCtx_ = nullptr;
   bool paused_ = false;
   auxDebugInfo pauseInfo_{};
+  // Per-channel flattened-sample counts + formatted RMS, keyed by object
+  // identity, so refreshVariables() doesn't rescan every audio object's
+  // samples on every call. A per-channel length mismatch (reassignment,
+  // in-place edit that changes length) forces recomputation for that
+  // object; entries for since-deleted objects just go unused.
+  mutable std::map<AuxObj, std::pair<std::vector<size_t>, std::string>> rmsCache_;
 };
