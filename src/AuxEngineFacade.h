@@ -3,6 +3,7 @@
 #include <auxe/auxe.h>
 #include <QVector>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -48,6 +49,11 @@ struct SignalData {
   std::vector<double> fullRmsDb;
 };
 
+// Shared, immutable handle to a SignalData snapshot. Sharing this pointer
+// through the display pipeline (rather than passing SignalData by value)
+// avoids repeatedly deep-copying the sample buffers of large signals.
+using SignalDataPtr = std::shared_ptr<const SignalData>;
+
 struct BinaryData {
   std::vector<unsigned char> bytes;
 };
@@ -62,7 +68,7 @@ struct RuntimeSettingsSnapshot {
   std::vector<std::string> udfPaths;
 };
 
-std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate);
+SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate);
 
 class AuxEngineFacade {
 public:
@@ -80,7 +86,7 @@ public:
   std::vector<VarSnapshot> listVariables() const;
   std::vector<VarSnapshot> listStructMembers(const std::string& path) const;
   std::vector<VarSnapshot> listCellMembers(const std::string& path) const;
-  std::optional<SignalData> getSignalData(const std::string& varName) const;
+  SignalDataPtr getSignalData(const std::string& varName) const;
   bool hasSignalData(const std::string& varName) const;
   std::optional<QVector<double>> getNumericVector(const std::string& varName) const;
   std::optional<double> getScalarValue(const std::string& varName) const;

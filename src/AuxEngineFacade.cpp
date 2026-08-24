@@ -28,15 +28,15 @@ namespace {
 constexpr double kRmsDbOffset = 3.0103;
 }  // namespace
 
-std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
+SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
   if (!obj) {
-    return std::nullopt;
+    return nullptr;
   }
 
   constexpr uint16_t kTypeComplex = 0x0060;
   const int channels = aux_num_channels(obj);
   if (channels <= 0) {
-    return std::nullopt;
+    return nullptr;
   }
 
   struct SegmentCopy {
@@ -83,7 +83,7 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
   }
 
   if (!std::isfinite(minStartMs)) {
-    return std::nullopt;
+    return nullptr;
   }
   if (data.sampleRate <= 0) {
     data.sampleRate = defaultSampleRate > 0 ? defaultSampleRate : 1;
@@ -104,7 +104,7 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
   }
 
   if (globalTotalSamples <= 0) {
-    return std::nullopt;
+    return nullptr;
   }
 
   data.channels.reserve(static_cast<size_t>(channels));
@@ -156,7 +156,7 @@ std::optional<SignalData> buildSignalDataFromAuxObj(AuxObj obj, int defaultSampl
       data.fullRmsDb.push_back(20.0 * std::log10(std::sqrt(static_cast<double>(mean))) + kRmsDbOffset);
     }
   }
-  return data;
+  return std::make_shared<const SignalData>(std::move(data));
 }
 
 namespace {
@@ -804,16 +804,16 @@ std::vector<VarSnapshot> AuxEngineFacade::listCellMembers(const std::string& pat
   return out;
 }
 
-std::optional<SignalData> AuxEngineFacade::getSignalData(const std::string& varName) const {
+SignalDataPtr AuxEngineFacade::getSignalData(const std::string& varName) const {
   auxContext* ctx = activeCtx_;
   if (!ctx) {
-    return std::nullopt;
+    return nullptr;
   }
 
   ScopedPathBinding binding;
   auto obj = resolveObjByPath(ctx, varName, cfg_, binding);
   if (!obj) {
-    return std::nullopt;
+    return nullptr;
   }
   return buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
 }
