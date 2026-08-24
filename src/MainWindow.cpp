@@ -192,25 +192,25 @@ std::optional<QVector<double>> numericVectorFromAuxObj(AuxObj obj) {
   return values;
 }
 
-SignalData graphSignalDataForDisplay(const SignalData& data) {
-  if (data.isAudio) {
+SignalDataPtr graphSignalDataForDisplay(const SignalDataPtr& data) {
+  if (data->isAudio) {
     return data;
   }
 
   const bool hasImaginaryComponent = std::any_of(
-      data.channels.begin(), data.channels.end(), [](const ChannelData& channel) {
+      data->channels.begin(), data->channels.end(), [](const ChannelData& channel) {
         return !channel.imagSamples.empty() && channel.imagSamples.size() == channel.samples.size();
       });
   if (!hasImaginaryComponent) {
     return data;
   }
 
-  SignalData graphData = data;
+  SignalData graphData = *data;
   graphData.isComplex = false;
   graphData.channels.clear();
-  graphData.channels.reserve(data.channels.size() * 2);
+  graphData.channels.reserve(data->channels.size() * 2);
 
-  for (const auto& channel : data.channels) {
+  for (const auto& channel : data->channels) {
     ChannelData realChannel;
     realChannel.samples = channel.samples;
     realChannel.segments = channel.segments;
@@ -222,7 +222,7 @@ SignalData graphSignalDataForDisplay(const SignalData& data) {
     graphData.channels.push_back(std::move(imagChannel));
   }
 
-  return graphData;
+  return std::make_shared<const SignalData>(std::move(graphData));
 }
 
 QByteArray buildAudioPcm16(const SignalData& sig, int& outChannelCount, int& outTotalFrames) {
@@ -1001,9 +1001,9 @@ std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
 
   if (!targetWindow) {
     targetWindow = createSignalFigureWindow(
-        graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(*sig), false, QString(), false);
+        graphicsManager_.nextUnnamedFigureTitle(), *graphSignalDataForDisplay(sig), false, QString(), false);
   } else {
-    targetWindow->updateData(graphSignalDataForDisplay(*sig));
+    targetWindow->updateData(*graphSignalDataForDisplay(sig));
     focusWindow(targetWindow);
     graphicsManager_.markFocused(targetWindow);
   }
@@ -3100,9 +3100,9 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
     if (!targetWindow) {
       targetWindow = createSignalFigureWindow(
-          graphicsManager_.nextUnnamedFigureTitle(), graphSignalDataForDisplay(*sig), false, QString(), false);
+          graphicsManager_.nextUnnamedFigureTitle(), *graphSignalDataForDisplay(sig), false, QString(), false);
     } else {
-      targetWindow->updateData(graphSignalDataForDisplay(*sig));
+      targetWindow->updateData(*graphSignalDataForDisplay(sig));
       focusWindow(targetWindow);
       graphicsManager_.markFocused(targetWindow);
     }
@@ -4148,11 +4148,11 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
   if (!sig) {
     return;
   }
-  SignalData graphData = graphSignalDataForDisplay(*sig);
+  SignalDataPtr graphData = graphSignalDataForDisplay(sig);
 
   const auto currentScope = engine_.activeContext();
   if (auto* existing = findSignalGraphWindow(path, currentScope)) {
-    existing->updateData(graphData);
+    existing->updateData(*graphData);
     focusWindow(existing);
     graphicsManager_.markFocused(existing);
     return;
@@ -4164,7 +4164,7 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
   options.sourcePath = path;
 
   auto* w = new SignalGraphWindow(
-      path, graphData, options, nullptr,
+      path, *graphData, options, nullptr,
       [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Graph);
@@ -5761,7 +5761,7 @@ void MainWindow::reconcileScopedWindows() {
       if (it->scope == currentScope) {
         auto sig = engine_.getSignalData(it->varName.toStdString());
         if (sig) {
-          g->updateData(graphSignalDataForDisplay(*sig));
+          g->updateData(*graphSignalDataForDisplay(sig));
         }
       }
     } else {
