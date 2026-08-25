@@ -16,3 +16,9 @@ Fixed selected-range tail slices to use the range end correctly when the selecti
 2026-07-29 20:12
 Fixed detection of selected ranges that end at the final sample.
 ================================
+2026-08-23 16:55
+Added a quote-free `//` shorthand syntax to the console: a line starting with `//` is preprocessed into a fully-quoted assignment before it reaches the engine, so string arguments (e.g. file paths) no longer need manual quoting. (0.9.7)
+================================
+2026-08-24 23:13
+Improved figure(x) graphics: reduced figure window margins, skipped RMS computation on a figure's first audio load, and eliminated redundant SignalData copies through the figure(x) display pipeline (existence checks no longer materialize the full signal, and SignalGraphWindow now shares a SignalDataPtr instead of deep-copying the signal at each step) — cutting the copy/allocation overhead for large stereo signals from ~5 full copies down to ~2. (0.9.7.1)
+================================
