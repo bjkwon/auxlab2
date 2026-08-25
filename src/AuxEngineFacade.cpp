@@ -110,28 +110,40 @@ SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
   data.channels.reserve(static_cast<size_t>(channels));
   for (int ch = 0; ch < channels; ++ch) {
     ChannelData channel;
-    channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
-    if (data.isComplex) {
-      channel.imagSamples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+    auto& segs = byChannel[static_cast<size_t>(ch)];
+    // Common case (a plain wave() with no gaps): exactly one segment that
+    // covers the whole channel, so the samples can be moved straight in
+    // instead of zero-filling the channel and then copying the segment on
+    // top of it -- that's two extra full passes over the buffer avoided.
+    const bool singleFullSegment = !data.isComplex && segs.size() == 1 && segs[0].startSample == 0 &&
+                                    segs[0].samples.size() == static_cast<size_t>(globalTotalSamples);
+    if (singleFullSegment) {
+      channel.samples = std::move(segs[0].samples);
+      channel.segments.push_back({0, globalTotalSamples});
+    } else {
+      channel.samples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+      if (data.isComplex) {
+        channel.imagSamples.assign(static_cast<size_t>(globalTotalSamples), 0.0);
+      }
+      for (const auto& seg : segs) {
+        if (seg.samples.empty()) {
+          continue;
+        }
+        const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
+        if (start >= channel.samples.size()) {
+          continue;
+        }
+        const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
+        std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
+        if (data.isComplex && !seg.imagSamples.empty()) {
+          std::copy_n(seg.imagSamples.begin(), count, channel.imagSamples.begin() + static_cast<qsizetype>(start));
+        }
+        channel.segments.push_back({static_cast<int>(start), static_cast<int>(count)});
+      }
+      std::sort(channel.segments.begin(), channel.segments.end(), [](const SignalSegment& lhs, const SignalSegment& rhs) {
+        return lhs.startSample < rhs.startSample;
+      });
     }
-    for (const auto& seg : byChannel[static_cast<size_t>(ch)]) {
-      if (seg.samples.empty()) {
-        continue;
-      }
-      const size_t start = static_cast<size_t>(std::max(0, seg.startSample));
-      if (start >= channel.samples.size()) {
-        continue;
-      }
-      const size_t count = std::min(seg.samples.size(), channel.samples.size() - start);
-      std::copy_n(seg.samples.begin(), count, channel.samples.begin() + static_cast<qsizetype>(start));
-      if (data.isComplex && !seg.imagSamples.empty()) {
-        std::copy_n(seg.imagSamples.begin(), count, channel.imagSamples.begin() + static_cast<qsizetype>(start));
-      }
-      channel.segments.push_back({static_cast<int>(start), static_cast<int>(count)});
-    }
-    std::sort(channel.segments.begin(), channel.segments.end(), [](const SignalSegment& lhs, const SignalSegment& rhs) {
-      return lhs.startSample < rhs.startSample;
-    });
     data.channels.push_back(std::move(channel));
   }
 
@@ -815,7 +827,21 @@ SignalDataPtr AuxEngineFacade::getSignalData(const std::string& varName) const {
   if (!obj) {
     return nullptr;
   }
-  return buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
+
+  const int channels = aux_num_channels(obj);
+  std::vector<size_t> lengths(static_cast<size_t>(std::max(channels, 0)));
+  for (int ch = 0; ch < channels; ++ch) {
+    lengths[static_cast<size_t>(ch)] = aux_flatten_channel_length(obj, ch);
+  }
+
+  auto it = signalDataCache_.find(obj);
+  if (it != signalDataCache_.end() && it->second.first == lengths) {
+    return it->second.second;
+  }
+
+  auto data = buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
+  signalDataCache_[obj] = {std::move(lengths), data};
+  return data;
 }
 
 bool AuxEngineFacade::hasSignalData(const std::string& varName) const {

@@ -135,4 +135,9 @@ private:
   // in-place edit that changes length) forces recomputation for that
   // object; entries for since-deleted objects just go unused.
   mutable std::map<AuxObj, std::pair<std::vector<size_t>, std::string>> rmsCache_;
+  // Same idea as rmsCache_, but for the built SignalData snapshot itself:
+  // reconcileScopedWindows() calls getSignalData() for every open plot
+  // window after every console command, so without this cache an unrelated
+  // command would re-copy and re-scan a large signal's samples every time.
+  mutable std::map<AuxObj, std::pair<std::vector<size_t>, SignalDataPtr>> signalDataCache_;
 };

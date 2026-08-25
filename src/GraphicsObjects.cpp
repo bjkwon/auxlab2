@@ -301,8 +301,9 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
 
     const auto& channel = data.channels[static_cast<size_t>(line.logicalChannel)].samples;
     const auto& segments = data.channels[static_cast<size_t>(line.logicalChannel)].segments;
-    line.ydata.reserve(static_cast<qsizetype>(channel.size()));
-    if (data.isAudio && !segments.empty()) {
+    const bool singleFullSegment = segments.size() == 1 && segments[0].startSample == 0 &&
+                                    static_cast<size_t>(segments[0].length) == channel.size();
+    if (data.isAudio && !segments.empty() && !singleFullSegment) {
       const double gapValue = std::numeric_limits<double>::quiet_NaN();
       line.ydata.fill(gapValue, static_cast<qsizetype>(channel.size()));
       for (const auto& seg : segments) {
@@ -311,20 +312,21 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
           continue;
         }
         const size_t count = std::min(static_cast<size_t>(seg.length), channel.size() - start);
-        for (size_t i = 0; i < count; ++i) {
-          line.ydata[static_cast<qsizetype>(start + i)] = channel[start + i];
-        }
+        std::copy_n(channel.begin() + static_cast<std::ptrdiff_t>(start), count,
+                    line.ydata.begin() + static_cast<qsizetype>(start));
       }
     } else {
-      for (size_t i = 0; i < channel.size(); ++i) {
-        line.ydata.push_back(channel[i]);
-      }
+      // No gaps to fill (or a non-audio vector): the whole channel maps
+      // straight onto ydata, so copy it in one bulk pass instead of
+      // push_back-ing one sample at a time.
+      line.ydata.resize(static_cast<qsizetype>(channel.size()));
+      std::copy(channel.begin(), channel.end(), line.ydata.begin());
     }
 
     if (!data.isAudio || data.sampleRate <= 0) {
-      line.xdata.reserve(static_cast<qsizetype>(channel.size()));
+      line.xdata.resize(static_cast<qsizetype>(channel.size()));
       for (size_t i = 0; i < channel.size(); ++i) {
-        line.xdata.push_back(static_cast<double>(i + 1));
+        line.xdata[static_cast<qsizetype>(i)] = static_cast<double>(i + 1);
       }
     }
   }
