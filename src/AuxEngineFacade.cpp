@@ -469,7 +469,48 @@ std::string AuxEngineFacade::cachedRmsForObj(const AuxObj& obj) const {
   return rms;
 }
 
+void AuxEngineFacade::clearValueCaches() const {
+  rmsCache_.clear();
+  signalDataCache_.clear();
+}
+
 namespace {
+bool commandMayMutateValues(const std::string& command) {
+  bool inString = false;
+  for (size_t i = 0; i < command.size(); ++i) {
+    const char ch = command[i];
+    if (ch == '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (ch == '/' && i + 1 < command.size() && command[i + 1] == '/') {
+      while (i < command.size() && command[i] != '\n') {
+        ++i;
+      }
+      continue;
+    }
+    if (ch == '<' && i + 1 < command.size() && command[i + 1] == '-') {
+      return true;
+    }
+    if (ch != '=') {
+      continue;
+    }
+    const char prev = i > 0 ? command[i - 1] : '\0';
+    const char next = i + 1 < command.size() ? command[i + 1] : '\0';
+    if (prev == '=' || prev == '<' || prev == '>' || prev == '!') {
+      continue;
+    }
+    if (next == '=') {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 std::string readTmpFile(FILE* f) {
   if (!f) {
     return {};
@@ -597,6 +638,7 @@ AuxEngineFacade::~AuxEngineFacade() {
 }
 
 bool AuxEngineFacade::init() {
+  clearValueCaches();
   rootCtx_ = aux_init(&cfg_);
   activeCtx_ = rootCtx_;
   return rootCtx_ != nullptr;
@@ -655,6 +697,9 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
     out.status = aux_eval(&activeCtx_, command, cfg_, preview);
     captured = filterCapturedNoise(cap.output());
   }
+  if (out.status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK) && commandMayMutateValues(command)) {
+    clearValueCaches();
+  }
 
   out.output = captured;
   if (!preview.empty()) {
@@ -691,6 +736,9 @@ int AuxEngineFacade::pollAsync() {
   }
   if (rootCtx_ && rootCtx_ != activeCtx_) {
     changed += aux_poll_async(rootCtx_);
+  }
+  if (changed > 0) {
+    clearValueCaches();
   }
   return changed;
 }
@@ -1211,14 +1259,22 @@ bool AuxEngineFacade::deleteVar(const std::string& varName) {
   if (!activeCtx_) {
     return false;
   }
-  return aux_del_var(activeCtx_, varName) == 0;
+  if (aux_del_var(activeCtx_, varName) != 0) {
+    return false;
+  }
+  clearValueCaches();
+  return true;
 }
 
 bool AuxEngineFacade::setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids) {
   if (!activeCtx_ || varName.empty()) {
     return false;
   }
-  return aux_set_handle_values(activeCtx_, varName, ids) == 0;
+  if (aux_set_handle_values(activeCtx_, varName, ids) != 0) {
+    return false;
+  }
+  clearValueCaches();
+  return true;
 }
 
 bool AuxEngineFacade::updateRuntimeHandleMembers(std::uint64_t handleId, const std::map<std::string, double>& members) {
@@ -1231,6 +1287,9 @@ bool AuxEngineFacade::updateRuntimeHandleMembers(std::uint64_t handleId, const s
   }
   if (rootCtx_ && rootCtx_ != activeCtx_ && aux_update_runtime_handle_members(rootCtx_, handleId, members) == 0) {
     updated = true;
+  }
+  if (updated) {
+    clearValueCaches();
   }
   return updated;
 }
@@ -1264,7 +1323,11 @@ bool AuxEngineFacade::invokeRecordCallback(std::uint64_t sessionId,
 
   activeCtx_ = ctx ? ctx : rootCtx_;
   paused_ = false;
-  return status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
+  const bool ok = status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
+  if (ok) {
+    clearValueCaches();
+  }
+  return ok;
 }
 
 bool AuxEngineFacade::attachRecordCallbackOutputsToHandle(std::uint64_t sessionId,
@@ -1276,6 +1339,9 @@ bool AuxEngineFacade::attachRecordCallbackOutputsToHandle(std::uint64_t sessionI
   if (rootCtx_ && rootCtx_ != activeCtx_ &&
       aux_attach_record_callback_outputs_to_handle(rootCtx_, sessionId, handleId) == 0) {
     updated = true;
+  }
+  if (updated) {
+    clearValueCaches();
   }
   return updated;
 }
@@ -1378,6 +1444,7 @@ bool AuxEngineFacade::applyRuntimeSettings(const RuntimeSettingsSnapshot& settin
     }
   }
 
+  clearValueCaches();
   return true;
 }
 
@@ -1414,5 +1481,6 @@ auxDebugAction AuxEngineFacade::debugResume(auxDebugAction action, std::string* 
     paused_ = false;
     activeCtx_ = rootCtx_;
   }
+  clearValueCaches();
   return r;
 }

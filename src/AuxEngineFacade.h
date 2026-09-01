@@ -122,6 +122,7 @@ public:
   auxDebugAction debugResume(auxDebugAction action, std::string* output = nullptr);
 
 private:
+  void clearValueCaches() const;
   std::string cachedRmsForObj(const AuxObj& obj) const;
 
   auxConfig cfg_{};
