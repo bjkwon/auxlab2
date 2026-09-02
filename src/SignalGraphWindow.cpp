@@ -195,6 +195,38 @@ QString formatSecondsCompact(double sec) {
   }
   return trimTrailingZeros(QString::number(clamped, 'f', 3));
 }
+
+int shiftSideFromEvent(const QKeyEvent* event) {
+  if (!event || event->key() != Qt::Key_Shift) {
+    return 0;
+  }
+
+  const quint32 nativeVirtualKey = event->nativeVirtualKey();
+  const quint32 nativeScanCode = event->nativeScanCode();
+#ifdef Q_OS_MAC
+  if (nativeVirtualKey == 0x38 || nativeScanCode == 0x38) {
+    return -1;
+  }
+  if (nativeVirtualKey == 0x3c || nativeScanCode == 0x3c) {
+    return 1;
+  }
+#elif defined(Q_OS_WIN)
+  if (nativeVirtualKey == 0xa0 || nativeScanCode == 0x2a) {
+    return -1;
+  }
+  if (nativeVirtualKey == 0xa1 || nativeScanCode == 0x36) {
+    return 1;
+  }
+#else
+  if (nativeScanCode == 50 || nativeScanCode == 0x2a) {
+    return -1;
+  }
+  if (nativeScanCode == 62 || nativeScanCode == 0x36) {
+    return 1;
+  }
+#endif
+  return 0;
+}
 }  // namespace
 
 SignalGraphWindow::SignalGraphWindow(const QString& varName,
@@ -458,15 +490,7 @@ bool SignalGraphWindow::setSelectedRange(std::uint64_t axesId, double xStart, do
   }
 
   const Range clamped = clampRange(*range);
-  if (graphics_.isNamedPlot()) {
-    for (const auto& axes : graphics_.axes()) {
-      axesSelectionRanges_[axes.common.id] = clamped;
-    }
-  } else {
-    axesSelectionRanges_[axesId] = clamped;
-  }
-  selStart_ = clamped.start;
-  selEnd_ = clamped.end;
+  setSelectionForAxes(axesId, clamped);
   update();
   return true;
 }
@@ -613,6 +637,15 @@ void SignalGraphWindow::resetRangeToFull() {
 }
 
 void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
+  if (event->key() == Qt::Key_Shift) {
+    const int side = shiftSideFromEvent(event);
+    if (side < 0) {
+      activeShiftSide_ = ShiftSide::Left;
+    } else if (side > 0) {
+      activeShiftSide_ = ShiftSide::Right;
+    }
+  }
+
   const bool closeShortcut =
 #ifdef Q_OS_MAC
       ((event->modifiers() & Qt::ControlModifier) && event->key() == Qt::Key_W);
@@ -660,6 +693,13 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
       default:
         break;
     }
+  }
+
+  if ((event->modifiers() & Qt::ShiftModifier) &&
+      (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right) &&
+      nudgeSelectionWithShiftArrow(event->key() == Qt::Key_Right ? 1 : -1)) {
+    event->accept();
+    return;
   }
 
   switch (event->key()) {
@@ -713,6 +753,20 @@ void SignalGraphWindow::keyPressEvent(QKeyEvent* event) {
   event->accept();
 }
 
+void SignalGraphWindow::keyReleaseEvent(QKeyEvent* event) {
+  if (event->key() == Qt::Key_Shift) {
+    const int side = shiftSideFromEvent(event);
+    if (side < 0 && activeShiftSide_ == ShiftSide::Left) {
+      activeShiftSide_ = ShiftSide::Unknown;
+    } else if (side > 0 && activeShiftSide_ == ShiftSide::Right) {
+      activeShiftSide_ = ShiftSide::Unknown;
+    } else if (!(event->modifiers() & Qt::ShiftModifier)) {
+      activeShiftSide_ = ShiftSide::Unknown;
+    }
+  }
+  QWidget::keyReleaseEvent(event);
+}
+
 void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
   if (event->button() != Qt::LeftButton || !workspaceActive_) {
     return QWidget::mousePressEvent(event);
@@ -747,6 +801,14 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
       selectingAxesId_ = axes->common.id;
     }
   }
+  if ((event->modifiers() & Qt::ShiftModifier) && selectingAxesId_ != 0 &&
+      extendSelectionAtPoint(selectingAxesId_, xToSample(event->pos()))) {
+    selecting_ = false;
+    selectingAxesId_ = 0;
+    update();
+    event->accept();
+    return;
+  }
   selStart_ = xToSample(event->pos());
   selEnd_ = selStart_;
   if (selectingAxesId_ != 0) {
@@ -779,9 +841,7 @@ void SignalGraphWindow::mouseMoveEvent(QMouseEvent* event) {
   if (selectingAxesId_ != 0) {
     const Range range{std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
     if (graphics_.isNamedPlot()) {
-      for (const auto& axes : graphics_.axes()) {
-        axesSelectionRanges_[axes.common.id] = range;
-      }
+      setSelectionForAxes(selectingAxesId_, range);
     } else {
       axesSelectionRanges_[selectingAxesId_] = range;
     }
@@ -807,9 +867,7 @@ void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
       const Range range{std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
       if (range.end > range.start) {
         if (graphics_.isNamedPlot()) {
-          for (const auto& axes : graphics_.axes()) {
-            axesSelectionRanges_[axes.common.id] = range;
-          }
+          setSelectionForAxes(selectingAxesId_, range);
         } else {
           axesSelectionRanges_[selectingAxesId_] = range;
         }
@@ -1082,6 +1140,48 @@ void SignalGraphWindow::panView(int direction) {
   applyRange({nextStart, nextStart + currentLen});
 }
 
+bool SignalGraphWindow::nudgeSelectionWithShiftArrow(int direction) {
+  if (data_->channels.empty() || direction == 0 || activeShiftSide_ == ShiftSide::Unknown) {
+    return false;
+  }
+
+  std::uint64_t axesId = 0;
+  if (const auto* axes = graphics_.leftChannelAxes()) {
+    const Range range = selectionForAxes(axes->common.id);
+    if (range.end > range.start) {
+      axesId = axes->common.id;
+    }
+  }
+  if (axesId == 0) {
+    for (const auto& [candidateAxesId, range] : axesSelectionRanges_) {
+      if (range.end > range.start) {
+        axesId = candidateAxesId;
+        break;
+      }
+    }
+  }
+  if (axesId == 0) {
+    return false;
+  }
+
+  const Range selected = selectionForAxes(axesId);
+  const int totalLen = std::max(1, totalTimelineSamples(*data_));
+  const int step = std::max(1, static_cast<int>(std::llround(std::max(1, viewLen_) / 100.0)));
+  Range nudged = selected;
+  if (activeShiftSide_ == ShiftSide::Left) {
+    nudged.start = std::clamp(selected.start + direction * step, 0, selected.end - 1);
+  } else {
+    nudged.end = std::clamp(selected.end + direction * step, selected.start + 1, totalLen);
+  }
+
+  if (nudged.start == selected.start && nudged.end == selected.end) {
+    return true;
+  }
+  setSelectionForAxes(axesId, nudged);
+  update();
+  return true;
+}
+
 void SignalGraphWindow::togglePlayPause() {
   if (!audioSink_) {
     startPlaybackForRange(activePlaybackRange());
@@ -1213,6 +1313,48 @@ SignalGraphWindow::Range SignalGraphWindow::selectionForAxes(std::uint64_t axesI
     return {};
   }
   return it->second;
+}
+
+void SignalGraphWindow::setSelectionForAxes(std::uint64_t axesId, const Range& range) {
+  const Range clamped = clampRange(range);
+  if (graphics_.isNamedPlot()) {
+    for (const auto& axes : graphics_.axes()) {
+      axesSelectionRanges_[axes.common.id] = clamped;
+    }
+  } else {
+    axesSelectionRanges_[axesId] = clamped;
+  }
+  selStart_ = clamped.start;
+  selEnd_ = clamped.end;
+}
+
+bool SignalGraphWindow::extendSelectionAtPoint(std::uint64_t axesId, int targetSample) {
+  const Range selected = selectionForAxes(axesId);
+  if (selected.end <= selected.start) {
+    return false;
+  }
+
+  Range extended = selected;
+  if (targetSample < selected.start) {
+    extended.start = targetSample;
+  } else if (targetSample > selected.end) {
+    extended.end = targetSample;
+  } else {
+    const int distanceToStart = std::abs(targetSample - selected.start);
+    const int distanceToEnd = std::abs(selected.end - targetSample);
+    if (distanceToStart <= distanceToEnd) {
+      extended.start = targetSample;
+    } else {
+      extended.end = targetSample;
+    }
+  }
+
+  extended = {std::min(extended.start, extended.end), std::max(extended.start, extended.end)};
+  if (extended.end <= extended.start) {
+    return false;
+  }
+  setSelectionForAxes(axesId, extended);
+  return true;
 }
 
 std::uint64_t SignalGraphWindow::axesIdAtPoint(const QPoint& pt) const {

@@ -79,6 +79,7 @@ public:
 protected:
   void paintEvent(QPaintEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
@@ -90,6 +91,12 @@ private:
   struct Range {
     int start = 0;
     int end = 0;
+  };
+
+  enum class ShiftSide {
+    Unknown,
+    Left,
+    Right,
   };
 
   QRect axesRectForPlot(const GraphicsAxesHandle& axes, const QRect& plot) const;
@@ -107,6 +114,7 @@ private:
   void zoomIn();
   void zoomOut();
   void panView(int direction);
+  bool nudgeSelectionWithShiftArrow(int direction);
   void togglePlayPause();
   void stopPlayback();
   void startPlaybackForRange(const Range& range);
@@ -114,6 +122,8 @@ private:
   Range activePlaybackRange() const;
   Range normalizedSelection() const;
   Range selectionForAxes(std::uint64_t axesId) const;
+  void setSelectionForAxes(std::uint64_t axesId, const Range& range);
+  bool extendSelectionAtPoint(std::uint64_t axesId, int targetSample);
   std::uint64_t axesIdAtPoint(const QPoint& pt) const;
   std::optional<Range> sampleRangeForXRange(std::uint64_t axesId, double xStart, double xEnd) const;
   std::optional<std::array<double, 2>> xRangeForSampleRange(std::uint64_t axesId, const Range& range) const;
@@ -154,6 +164,7 @@ private:
   std::uint64_t selectingAxesId_ = 0;
   int selStart_ = -1;
   int selEnd_ = -1;
+  ShiftSide activeShiftSide_ = ShiftSide::Unknown;
   std::map<std::uint64_t, Range> axesSelectionRanges_;
   bool hoverActive_ = false;
   int hoverSample_ = -1;
