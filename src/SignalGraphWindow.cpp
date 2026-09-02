@@ -841,7 +841,10 @@ void SignalGraphWindow::mouseMoveEvent(QMouseEvent* event) {
   if (selectingAxesId_ != 0) {
     const Range range{std::min(selStart_, selEnd_), std::max(selStart_, selEnd_)};
     if (graphics_.isNamedPlot()) {
-      setSelectionForAxes(selectingAxesId_, range);
+      const Range clamped = clampRange(range);
+      for (const auto& axes : graphics_.axes()) {
+        axesSelectionRanges_[axes.common.id] = clamped;
+      }
     } else {
       axesSelectionRanges_[selectingAxesId_] = range;
     }
