@@ -1,16 +1,21 @@
 #include "CommandConsole.h"
 
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextOption>
+#include <QUrl>
 
 #include <algorithm>
 
 CommandConsole::CommandConsole(QWidget* parent) : QPlainTextEdit(parent) {
+  setAcceptDrops(true);
   setUndoRedoEnabled(false);
   setWordWrapMode(QTextOption::NoWrap);
   appendPrompt();
@@ -45,6 +50,47 @@ bool CommandConsole::event(QEvent* event) {
     }
   }
   return QPlainTextEdit::event(event);
+}
+
+void CommandConsole::dragEnterEvent(QDragEnterEvent* event) {
+  if (!quotedPathListFromMimeData(event->mimeData()).isEmpty()) {
+    event->acceptProposedAction();
+    return;
+  }
+  QPlainTextEdit::dragEnterEvent(event);
+}
+
+void CommandConsole::dragMoveEvent(QDragMoveEvent* event) {
+  if (!quotedPathListFromMimeData(event->mimeData()).isEmpty()) {
+    event->acceptProposedAction();
+    return;
+  }
+  QPlainTextEdit::dragMoveEvent(event);
+}
+
+void CommandConsole::dropEvent(QDropEvent* event) {
+  const QString text = quotedPathListFromMimeData(event->mimeData());
+  if (text.isEmpty()) {
+    QPlainTextEdit::dropEvent(event);
+    return;
+  }
+
+  QTextCursor c = cursorForPosition(event->position().toPoint());
+  if (c.position() < inputStartPos_) {
+    c.setPosition(document()->characterCount() - 1);
+  }
+  setTextCursor(c);
+  ensureEditableCursor();
+
+  c = textCursor();
+  if (c.hasSelection() && c.selectionStart() < inputStartPos_) {
+    c.clearSelection();
+    c.setPosition(document()->characterCount() - 1);
+  }
+  c.insertText(text);
+  setTextCursor(c);
+  ensureEditableCursor();
+  event->acceptProposedAction();
 }
 
 QString CommandConsole::currentCommand() const {
@@ -320,4 +366,22 @@ void CommandConsole::ensureEditableCursor() {
     c.setPosition(document()->characterCount() - 1);
     setTextCursor(c);
   }
+}
+
+QString CommandConsole::quotedPathListFromMimeData(const QMimeData* mimeData) const {
+  if (!mimeData || !mimeData->hasUrls()) {
+    return {};
+  }
+
+  QStringList paths;
+  for (const QUrl& url : mimeData->urls()) {
+    if (!url.isLocalFile()) {
+      continue;
+    }
+    QString path = url.toLocalFile();
+    path.replace("\\", "\\\\");
+    path.replace("\"", "\\\"");
+    paths.push_back(QString("\"%1\"").arg(path));
+  }
+  return paths.join(", ");
 }
