@@ -69,6 +69,8 @@ constexpr uint16_t kDisplayTypebitHandle = 0x4000;
 constexpr int kDefaultAsyncCapturePollMs = 300;
 constexpr int kMinAsyncCapturePollMs = 5;
 constexpr int kMaxAsyncCapturePollMs = 5000;
+constexpr int kMaxObjectUndoCheckpoints = 20;
+constexpr const char* kObjectUndoVarPrefix = "__auxlab2_undo_";
 }
 
 class AudioCaptureSink final : public QIODevice {
@@ -1371,6 +1373,25 @@ void MainWindow::buildMenus() {
   auto* exportHistoryAction = fileMenu->addAction("Export &History as Plain Text...");
   connect(exportHistoryAction, &QAction::triggered, this, &MainWindow::exportHistoryAsPlainText);
 
+  auto* editMenu = menuBar()->addMenu("&Edit");
+#ifdef Q_OS_MAC
+  undoAction_ = editMenu->addAction("&Undo Object Change");
+  undoAction_->setShortcut(QKeySequence(QKeyCombination(Qt::ControlModifier | Qt::ShiftModifier, Qt::Key_Z)));
+#else
+  undoAction_ = editMenu->addAction("&Undo Object Change");
+  undoAction_->setShortcut(QKeySequence::Undo);
+#endif
+  undoAction_->setShortcutContext(Qt::ApplicationShortcut);
+
+#ifdef Q_OS_MAC
+  redoAction_ = editMenu->addAction("&Redo Object Change");
+  redoAction_->setShortcut(QKeySequence(QKeyCombination(Qt::ControlModifier, Qt::Key_Y)));
+#else
+  redoAction_ = editMenu->addAction("&Redo Object Change");
+  redoAction_->setShortcut(QKeySequence(QKeyCombination(Qt::ControlModifier, Qt::Key_Y)));
+#endif
+  redoAction_->setShortcutContext(Qt::ApplicationShortcut);
+
   auto* viewMenu = menuBar()->addMenu("&View");
   showDebugWindowAction_ = viewMenu->addAction("Show &Debug Window");
   showDebugWindowAction_->setCheckable(true);
@@ -1482,6 +1503,8 @@ void MainWindow::connectSignals() {
   });
   connect(commandBox_, &CommandConsole::historyNavigateRequested, this, &MainWindow::navigateHistoryFromCommand);
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
+  connect(commandBox_, &CommandConsole::objectUndoRequested, this, &MainWindow::undoObjectCommand);
+  connect(commandBox_, &CommandConsole::objectRedoRequested, this, &MainWindow::redoObjectCommand);
   connect(audioVariableBox_, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
     showVariableContextMenu(audioVariableBox_, pos);
   });
@@ -1532,6 +1555,8 @@ void MainWindow::connectSignals() {
   connect(focusDebugWindowAction_, &QAction::triggered, this, &MainWindow::focusDebugWindow);
   connect(showSettingsAction_, &QAction::triggered, this, &MainWindow::showSettingsDialog);
   connect(showAboutAction_, &QAction::triggered, this, &MainWindow::showAboutDialog);
+  connect(undoAction_, &QAction::triggered, this, &MainWindow::undoObjectCommand);
+  connect(redoAction_, &QAction::triggered, this, &MainWindow::redoObjectCommand);
   connect(toggleBreakpointAction_, &QAction::triggered, this, &MainWindow::toggleBreakpointAtCursor);
   connect(debugContinueAction_, &QAction::triggered, this, [this]() {
     handleDebugAction(auxDebugAction::AUX_DEBUG_CONTINUE);
@@ -2056,6 +2081,188 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 }
 
 void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
+  runCommandInternal(cmd, addToHistory, true);
+}
+
+bool MainWindow::isUndoCommand(const QString& cmd) const {
+  static const QRegularExpression kUndoPattern(R"(^\s*undo(?:\s*\(\s*\))?\s*;?\s*$)",
+                                               QRegularExpression::CaseInsensitiveOption);
+  return kUndoPattern.match(cmd).hasMatch();
+}
+
+bool MainWindow::isRedoCommand(const QString& cmd) const {
+  static const QRegularExpression kRedoPattern(R"(^\s*redo(?:\s*\(\s*\))?\s*;?\s*$)",
+                                               QRegularExpression::CaseInsensitiveOption);
+  return kRedoPattern.match(cmd).hasMatch();
+}
+
+bool MainWindow::shouldCreateObjectUndoCheckpoint(const QString& cmd) const {
+  static const QRegularExpression kAssignmentPattern(R"((^|[^=!<>~])=(?!=))");
+  static const QRegularExpression kDeleteOrClearPattern(R"(^\s*(delete|clear)\b)",
+                                                        QRegularExpression::CaseInsensitiveOption);
+
+  const QStringList parts = splitTopLevelStatements(cmd);
+  for (const QString& part : parts) {
+    const QString trimmed = part.trimmed();
+    if (trimmed.isEmpty() || isUndoCommand(trimmed) || isRedoCommand(trimmed)) {
+      continue;
+    }
+    if (kAssignmentPattern.match(trimmed).hasMatch() ||
+        kDeleteOrClearPattern.match(trimmed).hasMatch()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MainWindow::isReservedUndoVariable(const QString& varName) const {
+  return varName.startsWith(QString::fromLatin1(kObjectUndoVarPrefix));
+}
+
+QStringList MainWindow::userVariableNames() const {
+  QStringList out;
+  const auto vars = engine_.listVariables();
+  out.reserve(static_cast<qsizetype>(vars.size()));
+  for (const auto& var : vars) {
+    const QString name = QString::fromStdString(var.name);
+    if (!isReservedUndoVariable(name)) {
+      out.push_back(name);
+    }
+  }
+  out.removeDuplicates();
+  out.sort(Qt::CaseSensitive);
+  return out;
+}
+
+MainWindow::ObjectUndoCheckpoint MainWindow::captureObjectUndoCheckpoint(const QString& label) {
+  ObjectUndoCheckpoint checkpoint;
+  checkpoint.label = label;
+  checkpoint.userVars = userVariableNames();
+  checkpoint.checkpointVars.reserve(checkpoint.userVars.size());
+
+  const int serial = ++undoCheckpointSerial_;
+  for (int i = 0; i < checkpoint.userVars.size(); ++i) {
+    const QString hiddenName =
+        QString("%1%2_%3").arg(QString::fromLatin1(kObjectUndoVarPrefix)).arg(serial).arg(i);
+    if (!engine_.copyVar(checkpoint.userVars[i].toStdString(), hiddenName.toStdString())) {
+      checkpoint.label.clear();
+      cleanupObjectUndoCheckpoint(checkpoint);
+      return {};
+    }
+    checkpoint.checkpointVars.push_back(hiddenName);
+  }
+
+  return checkpoint;
+}
+
+void MainWindow::cleanupObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpoint) {
+  for (const QString& hiddenName : checkpoint.checkpointVars) {
+    engine_.deleteVar(hiddenName.toStdString());
+  }
+}
+
+void MainWindow::pruneObjectUndoStack() {
+  while (static_cast<int>(undoStack_.size()) > kMaxObjectUndoCheckpoints) {
+    cleanupObjectUndoCheckpoint(undoStack_.front());
+    undoStack_.erase(undoStack_.begin());
+  }
+}
+
+void MainWindow::clearRedoObjectUndoStack() {
+  for (const auto& checkpoint : redoStack_) {
+    cleanupObjectUndoCheckpoint(checkpoint);
+  }
+  redoStack_.clear();
+}
+
+bool MainWindow::restoreObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpoint, QString& err) {
+  if (checkpoint.userVars.size() != checkpoint.checkpointVars.size()) {
+    err = QStringLiteral("Undo checkpoint is incomplete.");
+    return false;
+  }
+
+  const QStringList currentVars = userVariableNames();
+  for (const QString& name : currentVars) {
+    if (!checkpoint.userVars.contains(name)) {
+      engine_.deleteVar(name.toStdString());
+    }
+  }
+
+  for (int i = 0; i < checkpoint.userVars.size(); ++i) {
+    if (!engine_.copyVar(checkpoint.checkpointVars[i].toStdString(), checkpoint.userVars[i].toStdString())) {
+      err = QString("Failed to restore variable '%1'.").arg(checkpoint.userVars[i]);
+      return false;
+    }
+  }
+
+  err.clear();
+  return true;
+}
+
+void MainWindow::undoObjectCommand() {
+  if (undoStack_.empty()) {
+    commandBox_->appendExecutionResult(QStringLiteral("Nothing to undo."));
+    return;
+  }
+
+  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("redo"));
+  if (current.label.isEmpty()) {
+    commandBox_->appendExecutionResult(QStringLiteral("Error: failed to create redo checkpoint."));
+    return;
+  }
+
+  ObjectUndoCheckpoint checkpoint = undoStack_.back();
+  undoStack_.pop_back();
+
+  QString err;
+  if (!restoreObjectUndoCheckpoint(checkpoint, err)) {
+    cleanupObjectUndoCheckpoint(current);
+    undoStack_.push_back(checkpoint);
+    commandBox_->appendExecutionResult(QString("Error: %1").arg(err));
+    return;
+  }
+
+  redoStack_.push_back(std::move(current));
+  cleanupObjectUndoCheckpoint(checkpoint);
+  commandBox_->appendExecutionResult(QStringLiteral("Undid object change."));
+  refreshVariables();
+  refreshDebugView();
+  reconcileScopedWindows();
+}
+
+void MainWindow::redoObjectCommand() {
+  if (redoStack_.empty()) {
+    commandBox_->appendExecutionResult(QStringLiteral("Nothing to redo."));
+    return;
+  }
+
+  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("undo"));
+  if (current.label.isEmpty()) {
+    commandBox_->appendExecutionResult(QStringLiteral("Error: failed to create undo checkpoint."));
+    return;
+  }
+
+  ObjectUndoCheckpoint checkpoint = redoStack_.back();
+  redoStack_.pop_back();
+
+  QString err;
+  if (!restoreObjectUndoCheckpoint(checkpoint, err)) {
+    cleanupObjectUndoCheckpoint(current);
+    redoStack_.push_back(checkpoint);
+    commandBox_->appendExecutionResult(QString("Error: %1").arg(err));
+    return;
+  }
+
+  undoStack_.push_back(std::move(current));
+  pruneObjectUndoStack();
+  cleanupObjectUndoCheckpoint(checkpoint);
+  commandBox_->appendExecutionResult(QStringLiteral("Redid object change."));
+  refreshVariables();
+  refreshDebugView();
+  reconcileScopedWindows();
+}
+
+void MainWindow::runCommandInternal(const QString& cmd, bool addToHistory, bool allowUndoCheckpoint) {
   reloadCurrentUdfIfStale("Reloaded after external edit");
   QString actual = translateShorthandLines(cmd);
   lastStartedAsyncRecordHandle_ = 0;
@@ -2084,16 +2291,44 @@ void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
     actual.replace(kMethodDeleteNoArg, QStringLiteral("delete(\\1)"));
   }
   const QString historyCommand = actual;
+  if (isUndoCommand(actual) || isRedoCommand(actual)) {
+    if (addToHistory) {
+      addHistory(historyCommand);
+    }
+    if (isUndoCommand(actual)) {
+      undoObjectCommand();
+    } else {
+      redoObjectCommand();
+    }
+    updateCommandPrompt();
+    historyNavIndex_ = -1;
+    historyDraft_.clear();
+    reverseSearchActive_ = false;
+    reverseSearchTerm_.clear();
+    reverseSearchIndex_ = -1;
+    return;
+  }
   actual = rewriteSelectedRangeCaptures(actual);
   if (addToHistory && !actual.trimmed().isEmpty()) {
     addHistory(historyCommand);
+  }
+
+  if (allowUndoCheckpoint && shouldCreateObjectUndoCheckpoint(actual)) {
+    ObjectUndoCheckpoint checkpoint = captureObjectUndoCheckpoint(historyCommand);
+    if (!checkpoint.label.isEmpty()) {
+      undoStack_.push_back(std::move(checkpoint));
+      pruneObjectUndoStack();
+      clearRedoObjectUndoStack();
+    } else {
+      statusBar()->showMessage("Object undo checkpoint could not be created.", 2500);
+    }
   }
 
   const QStringList topLevelParts = splitTopLevelStatements(actual);
   if (topLevelParts.size() > 1) {
     for (const QString& part : topLevelParts) {
       if (!part.trimmed().isEmpty()) {
-        runCommand(part, false);
+        runCommandInternal(part, false, false);
       }
     }
     return;
@@ -3404,6 +3639,9 @@ void MainWindow::syncRecordCallbackGraphicsOutputs(std::uint64_t recordHandleId)
 
   const auto vars = engine_.listVariables();
   for (const auto& var : vars) {
+    if (isReservedUndoVariable(QString::fromStdString(var.name))) {
+      continue;
+    }
     if (var.typeTag != "HNDL") {
       continue;
     }
@@ -3678,6 +3916,15 @@ void MainWindow::deleteVariablesFromBox(QTreeWidget* box) {
     return;
   }
 
+  ObjectUndoCheckpoint checkpoint = captureObjectUndoCheckpoint(QStringLiteral("delete variables"));
+  if (!checkpoint.label.isEmpty()) {
+    undoStack_.push_back(std::move(checkpoint));
+    pruneObjectUndoStack();
+    clearRedoObjectUndoStack();
+  } else {
+    statusBar()->showMessage("Object undo checkpoint could not be created.", 2500);
+  }
+
   int deleted = 0;
   for (const QString& name : names) {
     if (engine_.deleteVar(name.toStdString())) {
@@ -3723,6 +3970,9 @@ void MainWindow::refreshVariables() {
 
   const auto vars = engine_.listVariables();
   for (const auto& v : vars) {
+    if (isReservedUndoVariable(QString::fromStdString(v.name))) {
+      continue;
+    }
     auto* box = v.isAudio ? audioVariableBox_ : nonAudioVariableBox_;
     auto* item = new QTreeWidgetItem(box);
     item->setText(0, QString::fromStdString(v.name));

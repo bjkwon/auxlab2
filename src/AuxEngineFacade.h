@@ -105,6 +105,7 @@ public:
   std::set<int> getBreakpoints(const std::string& udfName) const;
 
   bool deleteVar(const std::string& varName);
+  bool copyVar(const std::string& fromName, const std::string& toName);
   bool setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids);
   bool updateRuntimeHandleMembers(std::uint64_t handleId, const std::map<std::string, double>& members);
   bool invokeRecordCallback(std::uint64_t sessionId, const std::string& callbackName, const auxRecordCallbackPayload& payload, std::string& output);

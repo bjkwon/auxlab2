@@ -161,6 +161,26 @@ void CommandConsole::keyPressEvent(QKeyEvent* event) {
   }
 
 #ifdef Q_OS_MAC
+  const bool objectUndoShortcut =
+      (mods & Qt::ControlModifier) && (mods & Qt::ShiftModifier) && key == Qt::Key_Z;
+  const bool objectRedoShortcut =
+      (mods & Qt::ControlModifier) && !(mods & Qt::ShiftModifier) && key == Qt::Key_Y;
+#else
+  const bool objectUndoShortcut = mods == Qt::ControlModifier && key == Qt::Key_Z;
+  const bool objectRedoShortcut = mods == Qt::ControlModifier && key == Qt::Key_Y;
+#endif
+  if (objectUndoShortcut) {
+    emit objectUndoRequested();
+    event->accept();
+    return;
+  }
+  if (objectRedoShortcut) {
+    emit objectRedoRequested();
+    event->accept();
+    return;
+  }
+
+#ifdef Q_OS_MAC
   const bool ctrlLike = (mods & Qt::ControlModifier) || (mods & Qt::MetaModifier);
 #else
   const bool ctrlLike = (mods & Qt::ControlModifier);

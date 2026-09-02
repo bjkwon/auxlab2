@@ -19,6 +19,8 @@ signals:
   void commandSubmitted(const QString& cmd);
   void historyNavigateRequested(int delta);
   void reverseSearchRequested();
+  void objectUndoRequested();
+  void objectRedoRequested();
 
 protected:
   bool event(QEvent* event) override;

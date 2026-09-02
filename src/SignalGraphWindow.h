@@ -105,9 +105,11 @@ private:
   void applyRange(const Range& range, bool recordHistory = true);
   Range clampRange(const Range& range) const;
   Range fullRange() const;
+  bool isZoomedIn() const;
   void recordRangeHistory(const Range& range);
   bool canStepRangeHistory(int delta) const;
   void stepRangeHistory(int delta);
+  void moveRangeStartToZero();
   void anchorRangeStartToZero();
   void anchorRangeEndToSignalEnd();
   void resetRangeToFull();
@@ -129,6 +131,8 @@ private:
   std::optional<std::array<double, 2>> xRangeForSampleRange(std::uint64_t axesId, const Range& range) const;
   int currentPlaybackSample() const;
   void handlePlaybackAfterRangeChange();
+  QString playbackTimestampText() const;
+  void updatePlaybackTitle();
   int xToSample(const QPoint& pt) const;
   QRect selectionReferenceRect() const;
   void updatePlayhead();

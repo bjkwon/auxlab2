@@ -1266,6 +1266,19 @@ bool AuxEngineFacade::deleteVar(const std::string& varName) {
   return true;
 }
 
+bool AuxEngineFacade::copyVar(const std::string& fromName, const std::string& toName) {
+  if (!activeCtx_ || fromName.empty() || toName.empty()) {
+    return false;
+  }
+  std::string preview;
+  const std::string expr = toName + "=" + fromName + ";";
+  if (aux_eval(&activeCtx_, expr, cfg_, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
+    return false;
+  }
+  clearValueCaches();
+  return true;
+}
+
 bool AuxEngineFacade::setHandleValues(const std::string& varName, const std::vector<std::uint64_t>& ids) {
   if (!activeCtx_ || varName.empty()) {
     return false;

@@ -16,6 +16,7 @@
 #include <QVector>
 #include <array>
 #include <map>
+#include <vector>
 
 class QListWidget;
 class QListWidgetItem;
@@ -85,11 +86,30 @@ private:
     QPointer<QWidget> window;
   };
 
+  struct ObjectUndoCheckpoint {
+    QString label;
+    QStringList userVars;
+    QStringList checkpointVars;
+  };
+
   void buildUi();
   void buildMenus();
   void connectSignals();
 
   void runCommand(const QString& cmd, bool addToHistory = true);
+  void runCommandInternal(const QString& cmd, bool addToHistory, bool allowUndoCheckpoint);
+  bool isUndoCommand(const QString& cmd) const;
+  bool isRedoCommand(const QString& cmd) const;
+  bool shouldCreateObjectUndoCheckpoint(const QString& cmd) const;
+  bool isReservedUndoVariable(const QString& varName) const;
+  QStringList userVariableNames() const;
+  ObjectUndoCheckpoint captureObjectUndoCheckpoint(const QString& label);
+  void cleanupObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpoint);
+  void pruneObjectUndoStack();
+  void clearRedoObjectUndoStack();
+  bool restoreObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpoint, QString& err);
+  void undoObjectCommand();
+  void redoObjectCommand();
   QString translateShorthandLines(const QString& text) const;
   QString translateShorthandLine(const QString& line) const;
   QString rewriteSelectedRangeCaptures(const QString& cmd) const;
@@ -206,6 +226,8 @@ private:
   QAction* closeUdfFileAction_ = nullptr;
   QAction* showSettingsAction_ = nullptr;
   QAction* showAboutAction_ = nullptr;
+  QAction* undoAction_ = nullptr;
+  QAction* redoAction_ = nullptr;
   QAction* toggleBreakpointAction_ = nullptr;
   QAction* debugContinueAction_ = nullptr;
   QAction* debugStepOverAction_ = nullptr;
@@ -283,6 +305,9 @@ private:
   bool reverseSearchActive_ = false;
   QString reverseSearchTerm_;
   int reverseSearchIndex_ = -1;
+  std::vector<ObjectUndoCheckpoint> undoStack_;
+  std::vector<ObjectUndoCheckpoint> redoStack_;
+  int undoCheckpointSerial_ = 0;
 
   QString currentUdfFilePath_;
   QString currentUdfName_;
