@@ -2318,8 +2318,23 @@ QString MainWindow::rewriteSelectedRangeCaptures(const QString& cmd) const {
       const int afterSel = i + 5;
       if (afterSel >= cmd.size() ||
           (cmd.at(afterSel) != QLatin1Char('_') && !cmd.at(afterSel).isLetterOrNumber())) {
-        out.append(selectedRangeCaptureExpression(varName));
-        i = afterSel;
+        QString channelSelector;
+        int afterShortcut = afterSel;
+        for (const QString& selector : {QStringLiteral(".left"), QStringLiteral(".right")}) {
+          if (cmd.mid(afterSel, selector.size()) != selector) {
+            continue;
+          }
+          const int afterSelector = afterSel + selector.size();
+          if (afterSelector < cmd.size() &&
+              (cmd.at(afterSelector) == QLatin1Char('_') || cmd.at(afterSelector).isLetterOrNumber())) {
+            continue;
+          }
+          channelSelector = selector.mid(1);
+          afterShortcut = afterSelector;
+          break;
+        }
+        out.append(selectedRangeCaptureExpression(varName, channelSelector));
+        i = afterShortcut;
         continue;
       }
     }
@@ -2330,27 +2345,28 @@ QString MainWindow::rewriteSelectedRangeCaptures(const QString& cmd) const {
   return out;
 }
 
-QString MainWindow::selectedRangeCaptureExpression(const QString& varName) const {
+QString MainWindow::selectedRangeCaptureExpression(const QString& varName, const QString& channelSelector) const {
+  const QString target = channelSelector.isEmpty() ? varName : QString("%1.%2").arg(varName, channelSelector);
   auto* window = graphicsManager_.findNamedFigure(varName);
   if (!window) {
-    return QString("%1([])").arg(varName);
+    return QString("%1([])").arg(target);
   }
 
   const auto selected = window->selectedRangeCapture();
   if (!selected.has_value()) {
-    return QString("%1([])").arg(varName);
+    return QString("%1([])").arg(target);
   }
 
   if (variableIsAudio(varName)) {
     if (selected->endsAtSignalEnd) {
-      return QString("%1(%2s~end)").arg(varName, QString::number(selected->xStart, 'g', 17));
+      return QString("%1(%2s~end)").arg(target, QString::number(selected->xStart, 'g', 17));
     }
     return QString("%1(%2s~%3s)")
-        .arg(varName, QString::number(selected->xStart, 'g', 17), QString::number(selected->xEnd, 'g', 17));
+        .arg(target, QString::number(selected->xStart, 'g', 17), QString::number(selected->xEnd, 'g', 17));
   }
 
   return QString("%1(%2:%3)")
-      .arg(varName,
+      .arg(target,
            QString::number(static_cast<long long>(std::llround(selected->xStart))),
            QString::number(static_cast<long long>(std::llround(selected->xEnd))));
 }

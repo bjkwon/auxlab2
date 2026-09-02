@@ -93,7 +93,7 @@ private:
   QString translateShorthandLines(const QString& text) const;
   QString translateShorthandLine(const QString& line) const;
   QString rewriteSelectedRangeCaptures(const QString& cmd) const;
-  QString selectedRangeCaptureExpression(const QString& varName) const;
+  QString selectedRangeCaptureExpression(const QString& varName, const QString& channelSelector = QString()) const;
   bool tryHandleGraphicsCommand(const QString& cmd, QString& output);
   void onAsyncPollTick();
   void processRecordingSessions();
