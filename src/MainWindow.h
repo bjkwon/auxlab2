@@ -26,6 +26,8 @@ class QTreeWidgetItem;
 class QAction;
 class QMenu;
 class QSplitter;
+class QTabWidget;
+class QToolButton;
 class QFileSystemWatcher;
 class AudioCaptureSink;
 class CommandConsole;
@@ -140,6 +142,12 @@ private:
   void openCellMembersForPath(const QString& path);
 
   void trackWindow(const QString& varName, QWidget* window, WindowKind kind, bool variableBacked = true);
+  int embeddedGraphTabIndex(SignalGraphWindow* window) const;
+  QString graphTabTitle(SignalGraphWindow* window) const;
+  void dockGraphWindow(SignalGraphWindow* window);
+  void detachGraphWindow(SignalGraphWindow* window);
+  void detachCurrentGraphTab();
+  void updateFigureTabControls();
   SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
   void focusWindow(QWidget* window) const;
   void reconcileScopedWindows();
@@ -197,6 +205,8 @@ private:
   QTreeWidget* audioVariableBox_ = nullptr;
   QTreeWidget* nonAudioVariableBox_ = nullptr;
   QListWidget* historyBox_ = nullptr;
+  QTabWidget* figureTabs_ = nullptr;
+  QToolButton* detachFigureButton_ = nullptr;
   UdfDebugWindow* debugWindow_ = nullptr;
   QAction* showDebugWindowAction_ = nullptr;
   QAction* focusMainWindowAction_ = nullptr;
