@@ -6,6 +6,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPushButton>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QShortcut>
@@ -254,6 +255,13 @@ SignalGraphWindow::SignalGraphWindow(const QString& varName,
   syncFigurePosFromWidget();
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
+
+  auto* dockButton = new QPushButton(QStringLiteral("Dock"), this);
+  dockButton->setToolTip(QStringLiteral("Move this figure back into the main window"));
+  dockButton->setVisible(false);
+  dockButton->setFocusPolicy(Qt::NoFocus);
+  dockButton_ = dockButton;
+  connect(dockButton, &QPushButton::clicked, this, [this]() { emit dockRequested(); });
 
   if (!data_->channels.empty()) {
     viewStart_ = 0;
@@ -527,6 +535,14 @@ void SignalGraphWindow::applyFigurePos(const std::array<double, 4>& pos) {
   syncFigurePosFromWidget();
   invalidateStaticLayer();
   update();
+}
+
+void SignalGraphWindow::setDockButtonVisible(bool visible) {
+  if (!dockButton_) {
+    return;
+  }
+  dockButton_->setVisible(visible);
+  updateDockButtonGeometry();
 }
 
 void SignalGraphWindow::paintEvent(QPaintEvent*) {
@@ -1602,6 +1618,17 @@ void SignalGraphWindow::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
   syncFigurePosFromWidget();
   invalidateStaticLayer();
+  updateDockButtonGeometry();
+}
+
+void SignalGraphWindow::updateDockButtonGeometry() {
+  if (!dockButton_) {
+    return;
+  }
+  const QSize hint = dockButton_->sizeHint();
+  const int margin = 10;
+  dockButton_->setGeometry(width() - hint.width() - margin, margin, hint.width(), hint.height());
+  dockButton_->raise();
 }
 
 void SignalGraphWindow::syncFigurePosFromWidget() {

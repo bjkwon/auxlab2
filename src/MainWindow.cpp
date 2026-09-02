@@ -49,8 +49,10 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QSplitter>
+#include <QTabWidget>
 #include <QTextStream>
 #include <QTreeWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -1282,7 +1284,28 @@ void MainWindow::buildUi() {
   auto* splitter = new QSplitter(this);
   mainSplitter_ = splitter;
 
+  auto* commandAndFigureSplitter = new QSplitter(Qt::Vertical, this);
+  commandAndFigureSplitter->setChildrenCollapsible(false);
+
   commandBox_ = new CommandConsole(this);
+
+  figureTabs_ = new QTabWidget(commandAndFigureSplitter);
+  figureTabs_->setDocumentMode(true);
+  figureTabs_->setMovable(true);
+  figureTabs_->setTabsClosable(false);
+  figureTabs_->setMinimumHeight(180);
+
+  detachFigureButton_ = new QToolButton(figureTabs_);
+  detachFigureButton_->setText(QStringLiteral("Detach"));
+  detachFigureButton_->setToolTip(QStringLiteral("Move the current figure to an independent window"));
+  detachFigureButton_->setEnabled(false);
+  figureTabs_->setCornerWidget(detachFigureButton_, Qt::TopRightCorner);
+
+  commandAndFigureSplitter->addWidget(commandBox_);
+  commandAndFigureSplitter->addWidget(figureTabs_);
+  commandAndFigureSplitter->setStretchFactor(0, 2);
+  commandAndFigureSplitter->setStretchFactor(1, 3);
+  commandAndFigureSplitter->setSizes({280, 420});
 
   auto* variablePanel = new QWidget(this);
   auto* variableLayout = new QVBoxLayout(variablePanel);
@@ -1338,10 +1361,10 @@ void MainWindow::buildUi() {
   historyBox_->setSelectionMode(QAbstractItemView::SingleSelection);
   historyBox_->installEventFilter(this);
 
-  splitter->addWidget(commandBox_);
+  splitter->addWidget(commandAndFigureSplitter);
   splitter->addWidget(variablePanel);
   splitter->addWidget(historyBox_);
-  splitter->setStretchFactor(0, 3);
+  splitter->setStretchFactor(0, 4);
   splitter->setStretchFactor(1, 2);
   splitter->setStretchFactor(2, 2);
 
@@ -1505,6 +1528,16 @@ void MainWindow::connectSignals() {
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
   connect(commandBox_, &CommandConsole::objectUndoRequested, this, &MainWindow::undoObjectCommand);
   connect(commandBox_, &CommandConsole::objectRedoRequested, this, &MainWindow::redoObjectCommand);
+  connect(detachFigureButton_, &QToolButton::clicked, this, &MainWindow::detachCurrentGraphTab);
+  connect(figureTabs_, &QTabWidget::currentChanged, this, [this](int index) {
+    updateFigureTabControls();
+    auto* graph = qobject_cast<SignalGraphWindow*>(figureTabs_->widget(index));
+    if (graph) {
+      graphicsManager_.markFocused(graph);
+      noteScopedWindowFocus(graph);
+      graph->setFocus(Qt::OtherFocusReason);
+    }
+  });
   connect(audioVariableBox_, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
     showVariableContextMenu(audioVariableBox_, pos);
   });
@@ -5548,8 +5581,20 @@ void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind
   auto* graphWindow = qobject_cast<SignalGraphWindow*>(window);
   if (graphWindow) {
     graphicsManager_.registerWindow(graphWindow);
+    connect(graphWindow, &SignalGraphWindow::dockRequested, this, [this, graphWindow]() {
+      dockGraphWindow(graphWindow);
+    });
+    dockGraphWindow(graphWindow);
   }
   connect(window, &QObject::destroyed, this, [this, window, graphWindow]() {
+    if (figureTabs_) {
+      for (int i = figureTabs_->count() - 1; i >= 0; --i) {
+        if (figureTabs_->widget(i) == window) {
+          figureTabs_->removeTab(i);
+        }
+      }
+      updateFigureTabControls();
+    }
     if (graphWindow) {
       graphicsManager_.unregisterWindow(graphWindow);
     }
@@ -5563,6 +5608,107 @@ void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind
   });
 
   reconcileScopedWindows();
+}
+
+int MainWindow::embeddedGraphTabIndex(SignalGraphWindow* window) const {
+  if (!figureTabs_ || !window) {
+    return -1;
+  }
+  for (int i = 0; i < figureTabs_->count(); ++i) {
+    if (figureTabs_->widget(i) == window) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+QString MainWindow::graphTabTitle(SignalGraphWindow* window) const {
+  if (!window) {
+    return {};
+  }
+  const auto it = std::find_if(scopedWindows_.begin(), scopedWindows_.end(), [window](const ScopedWindow& entry) {
+    return entry.window.data() == window;
+  });
+  if (it != scopedWindows_.end() && !it->varName.isEmpty()) {
+    return it->varName;
+  }
+  return window->windowTitle();
+}
+
+void MainWindow::dockGraphWindow(SignalGraphWindow* window) {
+  if (!figureTabs_ || !window) {
+    return;
+  }
+
+  const int existingIndex = embeddedGraphTabIndex(window);
+  if (existingIndex >= 0) {
+    figureTabs_->setCurrentIndex(existingIndex);
+    updateFigureTabControls();
+    return;
+  }
+
+  window->hide();
+  window->setDockButtonVisible(false);
+  window->setWindowFlags(Qt::Widget);
+  const int index = figureTabs_->addTab(window, graphTabTitle(window));
+  figureTabs_->setCurrentIndex(index);
+  window->show();
+  window->setFocus(Qt::OtherFocusReason);
+  updateFigureTabControls();
+}
+
+void MainWindow::detachGraphWindow(SignalGraphWindow* window) {
+  if (!figureTabs_ || !window) {
+    return;
+  }
+
+  const QRect tabAreaGlobal(figureTabs_->mapToGlobal(figureTabs_->rect().topLeft()), figureTabs_->size());
+  QScreen* targetScreen = QGuiApplication::screenAt(tabAreaGlobal.center());
+  if (!targetScreen) {
+    targetScreen = screen();
+  }
+  const QRect available = targetScreen ? targetScreen->availableGeometry() : QRect(0, 0, 1440, 900);
+  QSize detachedSize = window->size();
+  if (detachedSize.width() < 640 || detachedSize.height() < 360) {
+    detachedSize = QSize(900, 460);
+  }
+  detachedSize.setWidth(std::min(detachedSize.width(), std::max(640, available.width())));
+  detachedSize.setHeight(std::min(detachedSize.height(), std::max(360, available.height())));
+  QPoint detachedTopLeft = tabAreaGlobal.center() - QPoint(detachedSize.width() / 2, detachedSize.height() / 2);
+  detachedTopLeft.setX(std::clamp(detachedTopLeft.x(), available.left(), available.right() - detachedSize.width() + 1));
+  detachedTopLeft.setY(std::clamp(detachedTopLeft.y(), available.top(), available.bottom() - detachedSize.height() + 1));
+  const QRect detachedGeometry(detachedTopLeft, detachedSize);
+
+  const int index = embeddedGraphTabIndex(window);
+  if (index >= 0) {
+    figureTabs_->removeTab(index);
+  }
+
+  window->hide();
+  window->setParent(nullptr);
+  window->setWindowFlags(Qt::Window);
+  window->setDockButtonVisible(true);
+  window->setGeometry(detachedGeometry);
+  window->show();
+  focusWindow(window);
+  updateFigureTabControls();
+}
+
+void MainWindow::detachCurrentGraphTab() {
+  if (!figureTabs_) {
+    return;
+  }
+  auto* graph = qobject_cast<SignalGraphWindow*>(figureTabs_->currentWidget());
+  if (!graph) {
+    return;
+  }
+  detachGraphWindow(graph);
+}
+
+void MainWindow::updateFigureTabControls() {
+  if (detachFigureButton_) {
+    detachFigureButton_->setEnabled(figureTabs_ && figureTabs_->currentWidget() != nullptr);
+  }
 }
 
 SignalGraphWindow* MainWindow::findSignalGraphWindow(const QString& varName, auxContext* scope) const {
@@ -5969,6 +6115,17 @@ QString MainWindow::graphicsHandleDump(std::uint64_t handleId) const {
 
 void MainWindow::focusWindow(QWidget* window) const {
   if (!window) {
+    return;
+  }
+  if (auto* graph = qobject_cast<SignalGraphWindow*>(window); graph && embeddedGraphTabIndex(graph) >= 0) {
+    figureTabs_->setCurrentWidget(graph);
+    graph->show();
+    graph->setFocus(Qt::OtherFocusReason);
+    if (!suppressWindowActivation_) {
+      const_cast<MainWindow*>(this)->show();
+      const_cast<MainWindow*>(this)->raise();
+      const_cast<MainWindow*>(this)->activateWindow();
+    }
     return;
   }
   if (window->isMinimized()) {

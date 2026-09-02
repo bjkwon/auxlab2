@@ -3,6 +3,11 @@
 #include <QColor>
 #include <QPlainTextEdit>
 
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDropEvent;
+class QMimeData;
+
 class CommandConsole : public QPlainTextEdit {
   Q_OBJECT
 public:
@@ -24,6 +29,9 @@ signals:
 
 protected:
   bool event(QEvent* event) override;
+  void dragEnterEvent(QDragEnterEvent* event) override;
+  void dragMoveEvent(QDragMoveEvent* event) override;
+  void dropEvent(QDropEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
   void mouseReleaseEvent(QMouseEvent* event) override;
@@ -31,6 +39,7 @@ protected:
 private:
   void appendPrompt();
   void ensureEditableCursor();
+  QString quotedPathListFromMimeData(const QMimeData* mimeData) const;
 
   QString prompt_ = "AUX> ";
   QColor promptColor_ = QColor(90, 180, 255);

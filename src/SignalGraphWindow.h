@@ -7,6 +7,7 @@
 #include <QBuffer>
 #include <QImage>
 #include <QMoveEvent>
+#include <QPointer>
 #include <optional>
 #include <QTimer>
 #include <QWidget>
@@ -68,6 +69,7 @@ public:
   GraphicsFigureModel& graphicsModelMutable() { return graphics_; }
   std::array<double, 4> currentFigurePos() const;
   void applyFigurePos(const std::array<double, 4>& pos);
+  void setDockButtonVisible(bool visible);
   void refreshGraphics();
   void setAxesXLim(std::uint64_t axesId, const std::array<double, 2>& xlim);
   void setAxesYLim(std::uint64_t axesId, const std::array<double, 2>& ylim);
@@ -86,6 +88,9 @@ protected:
   void leaveEvent(QEvent* event) override;
   void moveEvent(QMoveEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
+
+signals:
+  void dockRequested();
 
 private:
   struct Range {
@@ -150,6 +155,7 @@ private:
   void ensureFftData();
   void drawFftOverlays(QPainter& p, const QRect& plot);
   std::vector<FftPaneLayout> buildFftPaneLayouts(const QRect& plot, int nChannels) const;
+  void updateDockButtonGeometry();
   QPoint clampFftPaneOffset(const QRect& plot, const QPoint& desired, int channelIndex) const;
   void syncFigurePosFromWidget();
 
@@ -216,4 +222,5 @@ private:
   mutable QString cachedRmsText_;
   mutable Range cachedRmsRange_{-1, -1};
   mutable int cachedRmsDataSerial_ = -1;
+  QPointer<QWidget> dockButton_;
 };
