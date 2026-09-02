@@ -76,6 +76,9 @@ Open from variable list with `Enter`.
 - `-`, `_`, `Down`: zoom out
 - `Left` / `Right`: pan view
 - Mouse drag: select a range
+- `Shift` + click with a selection already active: extend the nearest selection edge to the clicked point
+- Left `Shift` + `Left` / `Right`: nudge the selection start left or right by about 1/100 of the visible range
+- Right `Shift` + `Left` / `Right`: nudge the selection end left or right by about 1/100 of the visible range
 - `Enter`: zoom to selected range
 - The selected range is also a graphics-handle property:
 
@@ -89,16 +92,19 @@ h2.axes.selrange = h.axes.selrange
 
 `selrange` is `[]` or `[start end]` in the axes x-coordinate system. Named figures also expose `h.selrange` as a shared selection mirror. For a named plot, `x.?sel` is the selected data block represented by that range.
 - Range anchors and history:
-  - macOS: `Cmd+Left`: snap the visible range start to `0`
+  - macOS: `Ctrl+Left`: snap the visible range start to `0`
   - Windows/Linux: `Alt+Left`: snap the visible range start to `0`
-  - macOS: `Cmd+Right`: snap the visible range end to the end of the signal
+  - macOS: `Ctrl+Right`: snap the visible range end to the end of the signal
   - Windows/Linux: `Alt+Right`: snap the visible range end to the end of the signal
-  - macOS: `Cmd+/`: immediately unzoom to the full signal
+  - macOS: `Ctrl+/`: immediately unzoom to the full signal
   - Windows/Linux: `Alt+/`: immediately unzoom to the full signal
-  - macOS: `Cmd+,`: go back to the previous zoom/range
+  - macOS: `Ctrl+,`: go back to the previous zoom/range
   - Windows/Linux: `Alt+,`: go back to the previous zoom/range
-  - macOS: `Cmd+.`: go forward to the newer range after going back
+  - macOS: `Ctrl+.`: go forward to the newer range after going back
   - Windows/Linux: `Alt+.`: go forward to the newer range after going back
+  - When zoomed in, `Home`, `,`, or `<`: move the visible range start to `0`
+  - When zoomed in, `End`, `.`, or `>`: move the visible range end to the signal end
+  - When zoomed in, `/` or `?`: immediately unzoom to the full signal
 
 ### Stereo display modes
 

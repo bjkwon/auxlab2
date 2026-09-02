@@ -404,9 +404,15 @@ Open at least one graph window and verify:
 - `-` zooms out
 - `Left` / `Right` pans
 - drag-select then `Enter` zooms to selection
-- `Cmd+/` resets full range
-- `Cmd+,` goes back in range history
-- `Cmd+.` goes forward in range history
+- with a selection active, `Shift` + click extends the selection edge to the clicked point
+- left `Shift` + `Left` / `Right` nudges the selection start by about 1/100 of the visible range
+- right `Shift` + `Left` / `Right` nudges the selection end by about 1/100 of the visible range
+- macOS `Ctrl+/` or Windows/Linux `Alt+/` resets full range
+- macOS `Ctrl+,` or Windows/Linux `Alt+,` goes back in range history
+- macOS `Ctrl+.` or Windows/Linux `Alt+.` goes forward in range history
+- while zoomed in, `Home`, `,`, or `<` moves the visible range start to `0`
+- while zoomed in, `End`, `.`, or `>` moves the visible range end to the signal end
+- while zoomed in, `/` or `?` resets full range
 
 Expected:
 

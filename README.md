@@ -149,6 +149,9 @@ History file:
 - `-`: zoom out
 - `Left` / `Right`: pan view
 - Mouse drag: select range
+- `Shift` + click with an existing selection: extend the selection edge to the clicked point
+- Left `Shift` + `Left` / `Right`: move the selection start by about 1/100 of the visible range
+- Right `Shift` + `Left` / `Right`: move the selection end by about 1/100 of the visible range
 - `Enter`: zoom to selected range
 - Selected ranges are available from graphics handles:
   - `r = fig.axes.selrange` returns `[]` or `[start end]` in the axes x-coordinate system.
@@ -158,16 +161,19 @@ History file:
   - Named figures also expose `fig.selrange` as the shared selection mirror for stereo/namesake plots.
 - For a named plot, `x.?sel` returns the data block inside the named figure's selected range.
 - Range navigation shortcuts:
-  - macOS: `Cmd+Left`: set view start to `0`
+  - macOS: `Ctrl+Left`: set view start to `0`
   - Windows/Linux: `Alt+Left`: set view start to `0`
-  - macOS: `Cmd+Right`: set view end to the signal end
+  - macOS: `Ctrl+Right`: set view end to the signal end
   - Windows/Linux: `Alt+Right`: set view end to the signal end
-  - macOS: `Cmd+/`: reset to the full signal range
+  - macOS: `Ctrl+/`: reset to the full signal range
   - Windows/Linux: `Alt+/`: reset to the full signal range
-  - macOS: `Cmd+,`: go back to the previous range
+  - macOS: `Ctrl+,`: go back to the previous range
   - Windows/Linux: `Alt+,`: go back to the previous range
-  - macOS: `Cmd+.`: go forward again after stepping back
+  - macOS: `Ctrl+.`: go forward again after stepping back
   - Windows/Linux: `Alt+.`: go forward again after stepping back
+  - When zoomed in, `Home`, `,`, or `<`: move the visible range start to `0`
+  - When zoomed in, `End`, `.`, or `>`: move the visible range end to the signal end
+  - When zoomed in, `/` or `?`: reset to the full signal range
 - Stereo audio:
   - default: vertical stacked channels
   - `F2`: cycle vertical -> overlay (blue/red) -> overlay (red/blue)
