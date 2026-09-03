@@ -202,6 +202,53 @@ QString formatSecondsWithSuffix(double sec) {
   return body.contains('m') || body.endsWith('s') ? body : body + "s";
 }
 
+QString formatStatusSeconds(double sec, double viewSpanSec) {
+  const double clamped = std::isfinite(sec) ? std::max(0.0, sec) : 0.0;
+  const double span = std::isfinite(viewSpanSec) ? std::max(0.0, viewSpanSec) : 0.0;
+  const qint64 totalMs = std::max<qint64>(0, static_cast<qint64>(std::llround(clamped * 1000.0)));
+
+  if (span < 60.0) {
+    const qint64 totalSeconds = totalMs / 1000;
+    const int minutes = static_cast<int>(totalSeconds / 60);
+    const int seconds = static_cast<int>(totalSeconds % 60);
+    const int ms = static_cast<int>(totalMs % 1000);
+    return QString("%1:%2:%3")
+        .arg(minutes)
+        .arg(seconds, 2, 10, QChar('0'))
+        .arg(ms, 3, 10, QChar('0'));
+  }
+
+  const qint64 totalSeconds = (totalMs + 500) / 1000;
+  const qint64 minutesTotal = totalSeconds / 60;
+  const int seconds = static_cast<int>(totalSeconds % 60);
+  if (span < 3600.0) {
+    return QString("%1:%2").arg(static_cast<int>(minutesTotal), 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
+  }
+
+  const qint64 hours = minutesTotal / 60;
+  const int minutes = static_cast<int>(minutesTotal % 60);
+  return QString("%1:%2:%3").arg(static_cast<int>(hours), 2, 10, QChar('0')).arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
+}
+
+QString formatPlaybackSeconds(double sec) {
+  const double clamped = std::isfinite(sec) ? std::max(0.0, sec) : 0.0;
+  const qint64 totalSeconds = std::max<qint64>(0, static_cast<qint64>(std::floor(clamped)));
+  const qint64 minutesTotal = totalSeconds / 60;
+  const int seconds = static_cast<int>(totalSeconds % 60);
+  if (minutesTotal < 60) {
+    return QString("%1:%2")
+        .arg(static_cast<int>(minutesTotal), 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+  }
+
+  const qint64 hours = minutesTotal / 60;
+  const int minutes = static_cast<int>(minutesTotal % 60);
+  return QString("%1:%2:%3")
+      .arg(static_cast<int>(hours), 2, 10, QChar('0'))
+      .arg(minutes, 2, 10, QChar('0'))
+      .arg(seconds, 2, 10, QChar('0'));
+}
+
 int shiftSideFromEvent(const QKeyEvent* event) {
   if (!event || event->key() != Qt::Key_Shift) {
     return 0;
@@ -308,6 +355,17 @@ SignalGraphWindow::~SignalGraphWindow() {
 
 QString SignalGraphWindow::varName() const {
   return varName_;
+}
+
+QString SignalGraphWindow::dockTitle() const {
+  QString title = varName_.isEmpty() ? graphics_.figure().title : varName_;
+  if (audioSink_ && audioSink_->state() != QAudio::StoppedState && data_->isAudio) {
+    const QString timestamp = playbackTimestampText();
+    if (!timestamp.isEmpty()) {
+      title += QString(" - %1").arg(timestamp);
+    }
+  }
+  return title;
 }
 
 void SignalGraphWindow::setWorkspaceActive(bool active) {
@@ -1569,7 +1627,7 @@ QString SignalGraphWindow::playbackTimestampText() const {
     return {};
   }
   const double sec = data_->startTimeSec + static_cast<double>(sample) / static_cast<double>(data_->sampleRate);
-  return formatSecondsWithSuffix(sec);
+  return formatPlaybackSeconds(sec);
 }
 
 void SignalGraphWindow::updatePlaybackTitle() {
@@ -2028,14 +2086,10 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   }
 }
 
-QString SignalGraphWindow::formatTimeValue(int sample, bool withSuffix) const {
+QString SignalGraphWindow::formatStatusTimeValue(int sample, double viewSpanSec) const {
   if (data_->isAudio && data_->sampleRate > 0) {
     const double sec = static_cast<double>(sample) / static_cast<double>(data_->sampleRate);
-    const QString body = formatSecondsCompact(sec);
-    if (sec >= 60.0) {
-      return body;
-    }
-    return withSuffix ? body + "s" : body;
+    return formatStatusSeconds(sec, viewSpanSec);
   }
 
   const auto* axes = graphics_.leftChannelAxes();
@@ -2265,29 +2319,60 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
   const bool hasSel = sel.end > sel.start;
   const int totalTimeline = std::max(1, totalTimelineSamples(*data_));
   const Range rmsRange = hasSel ? sel : Range{0, totalTimeline};
+  const auto* axes = graphics_.leftChannelAxes();
+  const double audioViewSpanSec =
+      (data_->isAudio && data_->sampleRate > 0)
+          ? (axes ? std::fabs(axes->xlim[1] - axes->xlim[0])
+                  : static_cast<double>(std::max(1, viewLen_) - 1) / static_cast<double>(data_->sampleRate))
+          : 0.0;
 
   const QString mouseText =
       (hoverActive_ && hoverInFft_)
           ? QString("(%1, %2 Hz)").arg(hoverFftValue_, 0, 'f', 2).arg(hoverFftFreqHz_, 0, 'f', 1)
           : ((hoverActive_ && hoverSample_ >= 0)
-                 ? (data_->isAudio ? formatSecondsWithSuffix(hoverXCoord_)
+                 ? (data_->isAudio ? formatStatusSeconds(hoverXCoord_, audioViewSpanSec)
                                     : QString("(%1,%2)")
                                           .arg(QString::number(hoverXCoord_, 'g', 4))
                                           .arg(std::isfinite(hoverValue_) ? QString::number(hoverValue_, 'f', 3) : QString("null")))
                  : QString());
-  const auto* axes = graphics_.leftChannelAxes();
   const QString viewStartText =
-      axes ? (data_->isAudio ? formatSecondsWithSuffix(axes->xlim[0]) : QString::number(axes->xlim[0], 'g', 6))
-           : formatTimeValue(viewStart_, true);
+      axes ? (data_->isAudio ? formatStatusSeconds(axes->xlim[0], audioViewSpanSec) : QString::number(axes->xlim[0], 'g', 6))
+           : formatStatusTimeValue(viewStart_, audioViewSpanSec);
   const QString viewEndText =
-      axes ? (data_->isAudio ? formatSecondsWithSuffix(axes->xlim[1]) : QString::number(axes->xlim[1], 'g', 6))
-           : formatTimeValue(viewStart_ + std::max(1, viewLen_) - 1, true);
-  const QString selStartText = hasSel ? formatTimeValue(sel.start, true) : QString();
-  const QString selEndText = hasSel ? formatTimeValue(sel.end, true) : QString();
+      axes ? (data_->isAudio ? formatStatusSeconds(axes->xlim[1], audioViewSpanSec) : QString::number(axes->xlim[1], 'g', 6))
+           : formatStatusTimeValue(viewStart_ + std::max(1, viewLen_) - 1, audioViewSpanSec);
+  const QString selStartText = hasSel ? formatStatusTimeValue(sel.start, audioViewSpanSec) : QString();
+  const QString selEndText = hasSel ? formatStatusTimeValue(sel.end, audioViewSpanSec) : QString();
   const QString rmsText = formatRmsInfo(rmsRange);
 
   const QStringList cells = {mouseText, viewStartText, viewEndText, selStartText, selEndText, rmsText};
-  const int widths[] = {160, 90, 90, 90, 90, std::max(240, width() - 520)};
+  const QFontMetrics fm(p.font());
+  const int pad = 20;
+  const int hoverPrefWidth = hoverInFft_ || !data_->isAudio || audioViewSpanSec < 60.0 ? 120 : 72;
+  const int minWidths[] = {44, 58, 58, 58, 58, 118};
+  const int prefWidths[] = {
+      hoverPrefWidth,
+      std::clamp(fm.horizontalAdvance(viewStartText) + pad, minWidths[1], 86),
+      std::clamp(fm.horizontalAdvance(viewEndText) + pad, minWidths[2], 86),
+      std::clamp(fm.horizontalAdvance(selStartText) + pad, minWidths[3], 86),
+      std::clamp(fm.horizontalAdvance(selEndText) + pad, minWidths[4], 86),
+      std::max(150, fm.horizontalAdvance(rmsText) + pad),
+  };
+
+  int widths[6] = {};
+  int used = 0;
+  for (int i = 0; i < 6; ++i) {
+    widths[i] = minWidths[i];
+    used += widths[i];
+  }
+
+  int extra = std::max(0, bar.width() - used);
+  for (int i = 0; i < 5 && extra > 0; ++i) {
+    const int grow = std::min(extra, prefWidths[i] - widths[i]);
+    widths[i] += grow;
+    extra -= grow;
+  }
+  widths[5] += extra;
 
   int x = 0;
   for (int i = 0; i < cells.size(); ++i) {
@@ -2295,7 +2380,7 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
     p.setPen(QColor(140, 140, 140));
     p.drawRect(c.adjusted(0, 0, -1, -1));
     p.setPen(QColor(18, 18, 18));
-    p.drawText(c.adjusted(6, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, cells[i]);
+    p.drawText(c.adjusted(6, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(cells[i], Qt::ElideRight, c.width() - 12));
     x += widths[i];
     if (x >= width()) {
       break;

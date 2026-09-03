@@ -5584,6 +5584,13 @@ void MainWindow::trackWindow(const QString& varName, QWidget* window, WindowKind
     connect(graphWindow, &SignalGraphWindow::dockRequested, this, [this, graphWindow]() {
       dockGraphWindow(graphWindow);
     });
+    connect(graphWindow, &QWidget::windowTitleChanged, this, [this, graphWindow]() {
+      const int index = embeddedGraphTabIndex(graphWindow);
+      if (index >= 0 && figureTabs_) {
+        figureTabs_->setTabText(index, graphTabTitle(graphWindow));
+        figureTabs_->setTabToolTip(index, graphWindow->windowTitle());
+      }
+    });
     dockGraphWindow(graphWindow);
   }
   connect(window, &QObject::destroyed, this, [this, window, graphWindow]() {
@@ -5626,13 +5633,7 @@ QString MainWindow::graphTabTitle(SignalGraphWindow* window) const {
   if (!window) {
     return {};
   }
-  const auto it = std::find_if(scopedWindows_.begin(), scopedWindows_.end(), [window](const ScopedWindow& entry) {
-    return entry.window.data() == window;
-  });
-  if (it != scopedWindows_.end() && !it->varName.isEmpty()) {
-    return it->varName;
-  }
-  return window->windowTitle();
+  return window->dockTitle();
 }
 
 void MainWindow::dockGraphWindow(SignalGraphWindow* window) {
@@ -5651,6 +5652,7 @@ void MainWindow::dockGraphWindow(SignalGraphWindow* window) {
   window->setDockButtonVisible(false);
   window->setWindowFlags(Qt::Widget);
   const int index = figureTabs_->addTab(window, graphTabTitle(window));
+  figureTabs_->setTabToolTip(index, window->windowTitle());
   figureTabs_->setCurrentIndex(index);
   window->show();
   window->setFocus(Qt::OtherFocusReason);

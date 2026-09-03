@@ -9,6 +9,7 @@ Qt-based GUI application built on top of `auxe` (AUX Engine).
 - History box with persistent history file
 - UDF debug window (step over/in/out, continue, abort)
 - Signal graph windows (multiple)
+  - graph tabs can be detached into independent windows and docked back into the main window
 - Signal table windows (multiple)
 
 ## Workspace Layout
@@ -145,6 +146,8 @@ History file:
 - x-axis: time (audio) or index (non-audio)
 - y-axis: `[-1, 1]` (audio) or auto-fit (non-audio)
 - x/y ticks and labels
+- `Detach`: move the current graph tab into an independent window
+- `Dock`: move a detached graph window back into the main window
 - `+`: zoom in (center-based)
 - `-`: zoom out
 - `Left` / `Right`: pan view

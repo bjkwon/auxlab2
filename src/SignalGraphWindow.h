@@ -52,6 +52,7 @@ public:
   ~SignalGraphWindow() override;
 
   QString varName() const;
+  QString dockTitle() const;
   void setWorkspaceActive(bool active);
   void updateData(const SignalDataPtr& data);
   std::uint64_t addAxes(const std::array<double, 4>& pos);
@@ -148,7 +149,7 @@ private:
   int sampleToX(const QRect& plot, int sample) const;
   QRect plotRect() const;
   void updateHoverFromPoint(const QPoint& pt);
-  QString formatTimeValue(int sample, bool withSuffix) const;
+  QString formatStatusTimeValue(int sample, double viewSpanSec) const;
   QString formatRmsInfo(const Range& range) const;
   void drawStatusBar(QPainter& p) const;
   void toggleFftOverlay();
