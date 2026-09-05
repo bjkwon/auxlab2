@@ -129,6 +129,7 @@ Two details worth knowing:
 
 - `Enter` on selected row: inject command into console input line
 - Double-click: inject and execute
+- Object undo/redo from the menu or shortcuts leaves a comment line such as `// undo x` or `// redo x2`
 - History is saved/restored automatically
 
 History file:

@@ -249,6 +249,27 @@ QString formatPlaybackSeconds(double sec) {
       .arg(seconds, 2, 10, QChar('0'));
 }
 
+QString formatYTickLabel(double value, bool audioScale) {
+  const double normalized = std::fabs(value) < 5e-10 ? 0.0 : value;
+  if (audioScale) {
+    if (normalized == 0.0) {
+      return QStringLiteral("0");
+    }
+    return QString::number(normalized, 'f', 1);
+  }
+
+  QString label = QString::number(normalized, 'f', 2);
+  if (label.contains('.')) {
+    while (label.endsWith('0')) {
+      label.chop(1);
+    }
+    if (label.endsWith('.')) {
+      label.chop(1);
+    }
+  }
+  return label;
+}
+
 int shiftSideFromEvent(const QKeyEvent* event) {
   if (!event || event->key() != Qt::Key_Shift) {
     return 0;
@@ -1873,8 +1894,6 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       const double xSpan = std::max(1e-12, xEndVal - xStartVal);
       const double yStartVal = axes.ylim[0];
       const double yEndVal = axes.ylim[1];
-      const double ySpan = std::max(1e-12, yEndVal - yStartVal);
-      const int yDigits = ySpan < 0.1 ? 4 : (ySpan < 1.0 ? 3 : 2);
       std::vector<double> xTicks;
       xTicks.reserve(10);
       if (xIsTime) {
@@ -1967,8 +1986,9 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
         const int y = axesRect.bottom() - (i * axesRect.height()) / (yTickCount - 1);
         const double v = yStartVal + ((yEndVal - yStartVal) * i) / (yTickCount - 1);
         p.drawLine(axesRect.left() - 4, y, axesRect.left(), y);
-        const QString label = QString::number(v, 'f', yDigits);
-        p.drawText(QRect(2, y - 8, axesRect.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter, label);
+        const QString label = formatYTickLabel(v, data_->isAudio);
+        const QRect labelRect(plot.left(), y - 8, std::max(0, axesRect.left() - plot.left() - 8), 16);
+        p.drawText(labelRect, Qt::AlignRight | Qt::AlignVCenter, label);
       }
     }
 

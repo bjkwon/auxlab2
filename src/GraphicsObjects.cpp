@@ -6,9 +6,9 @@
 #include <limits>
 
 namespace {
-std::array<double, 4> kDefaultMonoAxesPos{0.045, 0.09, 0.94, 0.87};
-std::array<double, 4> kDefaultTopAxesPos{0.045, 0.525, 0.94, 0.435};
-std::array<double, 4> kDefaultBottomAxesPos{0.045, 0.09, 0.94, 0.435};
+std::array<double, 4> kDefaultMonoAxesPos{0.06, 0.09, 0.925, 0.87};
+std::array<double, 4> kDefaultTopAxesPos{0.06, 0.525, 0.925, 0.435};
+std::array<double, 4> kDefaultBottomAxesPos{0.06, 0.09, 0.925, 0.435};
 QColor kDefaultFigureColor(212, 212, 196);
 QColor kDefaultAxesColor(188, 196, 190);
 QColor kDefaultLeftLineColor(28, 62, 178);

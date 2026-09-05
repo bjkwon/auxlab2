@@ -49,6 +49,8 @@ SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
   data.isAudio = aux_is_audio(obj);
   data.isComplex = (aux_type(obj) & kTypeComplex) == kTypeComplex;
   data.sampleRate = 0;
+  uint64_t matrixRows = 0;
+  uint64_t matrixCols = 0;
 
   double minStartMs = std::numeric_limits<double>::infinity();
   std::vector<std::vector<SegmentCopy>> byChannel(static_cast<size_t>(channels));
@@ -63,6 +65,14 @@ SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
       minStartMs = std::min(minStartMs, seg.tmark);
       if (seg.fs > 0) {
         data.sampleRate = seg.fs;
+      }
+      if (!data.isAudio && ch == 0 && segIndex == 0 && seg.nGroups > 0 && seg.nSamples > 0) {
+        matrixRows = seg.nGroups;
+        matrixCols = seg.nSamples / seg.nGroups;
+        if (matrixCols == 0) {
+          matrixCols = seg.nSamples;
+          matrixRows = 1;
+        }
       }
 
       SegmentCopy copy;
@@ -105,6 +115,12 @@ SignalDataPtr buildSignalDataFromAuxObj(AuxObj obj, int defaultSampleRate) {
 
   if (globalTotalSamples <= 0) {
     return nullptr;
+  }
+
+  if (!data.isAudio && channels == 1 && matrixRows > 0 && matrixCols > 0 &&
+      matrixRows * matrixCols == static_cast<uint64_t>(globalTotalSamples)) {
+    data.matrixRows = static_cast<size_t>(matrixRows);
+    data.matrixCols = static_cast<size_t>(matrixCols);
   }
 
   data.channels.reserve(static_cast<size_t>(channels));
@@ -877,9 +893,19 @@ SignalDataPtr AuxEngineFacade::getSignalData(const std::string& varName) const {
   }
 
   const int channels = aux_num_channels(obj);
-  std::vector<size_t> lengths(static_cast<size_t>(std::max(channels, 0)));
+  std::vector<size_t> lengths;
+  lengths.reserve(static_cast<size_t>(std::max(channels, 0)) * 3 + 1);
+  lengths.push_back(static_cast<size_t>(aux_type(obj)));
   for (int ch = 0; ch < channels; ++ch) {
-    lengths[static_cast<size_t>(ch)] = aux_flatten_channel_length(obj, ch);
+    lengths.push_back(aux_flatten_channel_length(obj, ch));
+    const int segCount = aux_num_segments(obj, ch);
+    lengths.push_back(static_cast<size_t>(std::max(segCount, 0)));
+    if (segCount > 0) {
+      AuxSignal seg{};
+      if (aux_get_segment(obj, ch, 0, seg)) {
+        lengths.push_back(static_cast<size_t>(seg.nGroups));
+      }
+    }
   }
 
   auto it = signalDataCache_.find(obj);

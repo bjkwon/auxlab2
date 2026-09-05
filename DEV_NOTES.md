@@ -1,3 +1,32 @@
+2026-09-04 version 0.9.9
+================================
+2026-09-04 Object list view Table viewing improved: Use a different color gray for top row or left column; display up to "Display Limit"; remembers the last position and size so close and open it again at the last position; top row or left-most column pinned
+================================
+2026-09-04 Fix randperm bug. auxe 2.4.1
+================================
+2026-09-04 External module import 
+================================
+2026-09-03 Audio object list view, column settigs flexible
+================================
+2026-09-03 Current time display while play audio
+================================
+2026-09-02 filename embedding using mouse in the main window
+================================
+2026-09-02 Object UNDO/REDO
+================================
+2026-09-01 graph docking; range selection extending to L/R, Using L R arrow keys
+================================
+2026-08-25 figure rendering speed improved
+================================
+2026-08-24 figure margin reduced
+================================
+2026-08-23 // F long-filename
+================================
+2026-08-22 figure(x).selrange
+================================
+2026-07-28
+zero arg function now accepts syntax func() 
+================================
 2026-07-29 13:17
 Allowed no-argument functions to use empty parentheses, e.g. `getfs()`; the historical shorthand `getfs` still works.
 ================================

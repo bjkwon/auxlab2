@@ -209,6 +209,7 @@ private:
   void savePersistedRuntimeSettings() const;
   void loadPersistedWindowLayout();
   void savePersistedWindowLayout() const;
+  void applyAudioColumnVisibility();
   void startWatchingCurrentUdf();
   bool reloadCurrentUdfIfStale(const QString& reason, bool forceReload = false);
   void toggleBreakpointAtCursor();
@@ -324,5 +325,6 @@ private:
   QStringList recentUdfFiles_;
   QTimer* asyncPollTimer_ = nullptr;
   int asyncCapturePollMs_ = 300;
+  bool audioColumnVisible_[6] = {true, false, true, false, false, true};
   bool suppressWindowActivation_ = false;
 };

@@ -16,6 +16,7 @@
 #include <QAudioSource>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -27,6 +28,7 @@
 #include <QFileSystemWatcher>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -73,6 +75,16 @@ constexpr int kMinAsyncCapturePollMs = 5;
 constexpr int kMaxAsyncCapturePollMs = 5000;
 constexpr int kMaxObjectUndoCheckpoints = 20;
 constexpr const char* kObjectUndoVarPrefix = "__auxlab2_undo_";
+
+enum AudioVariableColumn {
+  AudioColumnName = 0,
+  AudioColumnChannels,
+  AudioColumnRms,
+  AudioColumnSize,
+  AudioColumnIntervals,
+  AudioColumnDurations,
+  AudioColumnCount
+};
 }
 
 class AudioCaptureSink final : public QIODevice {
@@ -144,12 +156,127 @@ QString historyFilePath() {
   return d.filePath("auxlab2.history");
 }
 
-QString truncateDisplayText(const std::string& s, int maxChars = 140) {
-  const QString q = QString::fromStdString(s);
-  if (q.size() <= maxChars) {
-    return q;
+QString truncateDisplayText(const QString& s, int maxChars = 140) {
+  if (s.size() <= maxChars) {
+    return s;
   }
-  return q.left(maxChars - 3) + "...";
+  return s.left(maxChars - 3) + "...";
+}
+
+QString truncateDisplayText(const std::string& s, int maxChars = 140) {
+  return truncateDisplayText(QString::fromStdString(s), maxChars);
+}
+
+QString formatAudioListTime(double sec) {
+  if (!std::isfinite(sec)) {
+    return QStringLiteral("-");
+  }
+  const double absSec = std::abs(sec);
+  if (absSec < 1.0) {
+    return QString("%1ms").arg(sec * 1000.0, 0, 'f', 1);
+  }
+  if (absSec < 60.0) {
+    return QString("%1s").arg(sec, 0, 'f', 1);
+  }
+  return QString("%1m").arg(sec / 60.0, 0, 'f', 1);
+}
+
+QString formatAudioListDuration(double sec) {
+  if (!std::isfinite(sec)) {
+    return QStringLiteral("-");
+  }
+
+  const qint64 totalMs = std::max<qint64>(0, static_cast<qint64>(std::llround(sec * 1000.0)));
+  if (totalMs >= 60LL * 60LL * 1000LL) {
+    const qint64 totalSeconds = static_cast<qint64>(std::llround(static_cast<double>(totalMs) / 1000.0));
+    const qint64 hours = totalSeconds / 3600;
+    const qint64 minutes = (totalSeconds % 3600) / 60;
+    const qint64 seconds = totalSeconds % 60;
+    return QString("%1h %2m %3s").arg(hours).arg(minutes).arg(seconds);
+  }
+
+  const qint64 minutes = totalMs / 60000;
+  const qint64 seconds = (totalMs % 60000) / 1000;
+  const qint64 milliseconds = totalMs % 1000;
+  return QString("%1:%2:%3")
+      .arg(minutes, 2, 10, QLatin1Char('0'))
+      .arg(seconds, 2, 10, QLatin1Char('0'))
+      .arg(milliseconds, 3, 10, QLatin1Char('0'));
+}
+
+bool channelTimelinesMatch(const ChannelData& lhs, const ChannelData& rhs) {
+  if (lhs.samples.size() != rhs.samples.size() || lhs.segments.size() != rhs.segments.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.segments.size(); ++i) {
+    if (lhs.segments[i].startSample != rhs.segments[i].startSample ||
+        lhs.segments[i].length != rhs.segments[i].length) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool allChannelTimelinesMatch(const SignalData& data) {
+  if (data.channels.size() < 2) {
+    return true;
+  }
+  const ChannelData& first = data.channels.front();
+  return std::all_of(data.channels.begin() + 1, data.channels.end(), [&first](const ChannelData& channel) {
+    return channelTimelinesMatch(first, channel);
+  });
+}
+
+QString audioChannelIntervalsText(const SignalData& data, const ChannelData& channel) {
+  if (data.sampleRate <= 0 || channel.segments.empty()) {
+    return QString();
+  }
+  QStringList intervals;
+  for (const SignalSegment& seg : channel.segments) {
+    const double startSec = data.startTimeSec + static_cast<double>(seg.startSample) / data.sampleRate;
+    const double endSec = startSec + static_cast<double>(seg.length) / data.sampleRate;
+    intervals.push_back(QString("(%1~%2)").arg(formatAudioListTime(startSec), formatAudioListTime(endSec)));
+  }
+  return intervals.join(", ");
+}
+
+QString audioChannelDurationsText(const SignalData& data, const ChannelData& channel) {
+  if (data.sampleRate <= 0 || channel.segments.empty()) {
+    return QString();
+  }
+  QStringList durations;
+  for (const SignalSegment& seg : channel.segments) {
+    durations.push_back(formatAudioListDuration(static_cast<double>(seg.length) / data.sampleRate));
+  }
+  return durations.join(", ");
+}
+
+QString audioIntervalsText(const SignalData& data) {
+  if (data.channels.empty()) {
+    return QString();
+  }
+  if (allChannelTimelinesMatch(data)) {
+    return audioChannelIntervalsText(data, data.channels.front());
+  }
+  QStringList channels;
+  for (const ChannelData& channel : data.channels) {
+    channels.push_back(audioChannelIntervalsText(data, channel));
+  }
+  return channels.join("; ");
+}
+
+QString audioDurationsText(const SignalData& data) {
+  if (data.channels.empty()) {
+    return QString();
+  }
+  if (allChannelTimelinesMatch(data)) {
+    return audioChannelDurationsText(data, data.channels.front());
+  }
+  QStringList channels;
+  for (const ChannelData& channel : data.channels) {
+    channels.push_back(audioChannelDurationsText(data, channel));
+  }
+  return channels.join("; ");
 }
 
 QString makeSessionBannerText() {
@@ -599,6 +726,8 @@ std::optional<SignalData> signalDataFromNumericDisplay(const QString& text) {
     for (double v : values) {
       channel.samples.push_back(v);
     }
+    data.matrixRows = 1;
+    data.matrixCols = static_cast<size_t>(values.size());
     data.channels.push_back(std::move(channel));
     return data;
   }
@@ -612,6 +741,8 @@ std::optional<SignalData> signalDataFromNumericDisplay(const QString& text) {
   SignalData data;
   ChannelData channel;
   channel.samples.push_back(scalar);
+  data.matrixRows = 1;
+  data.matrixCols = 1;
   data.channels.push_back(std::move(channel));
   return data;
 }
@@ -1319,14 +1450,17 @@ void MainWindow::buildUi() {
   audioLayout->setContentsMargins(0, 0, 0, 0);
   audioLayout->addWidget(new QLabel("Audio Objects", audioSection));
   audioVariableBox_ = new QTreeWidget(audioSection);
-  audioVariableBox_->setColumnCount(4);
-  audioVariableBox_->setHeaderLabels({"Name", "dBRMS", "Size", "Signal Intervals (ms)"});
+  audioVariableBox_->setColumnCount(AudioColumnCount);
+  audioVariableBox_->setHeaderLabels({"Name", "Chan", "dBRMS", "Size", "Signal Intervals", "Durations"});
   audioVariableBox_->header()->setSectionResizeMode(QHeaderView::Interactive);
   audioVariableBox_->header()->setStretchLastSection(false);
-  audioVariableBox_->setColumnWidth(0, 180);
-  audioVariableBox_->setColumnWidth(1, 90);
-  audioVariableBox_->setColumnWidth(2, 120);
-  audioVariableBox_->setColumnWidth(3, 360);
+  audioVariableBox_->setColumnWidth(AudioColumnName, 180);
+  audioVariableBox_->setColumnWidth(AudioColumnChannels, 45);
+  audioVariableBox_->setColumnWidth(AudioColumnRms, 140);
+  audioVariableBox_->setColumnWidth(AudioColumnSize, 120);
+  audioVariableBox_->setColumnWidth(AudioColumnIntervals, 360);
+  audioVariableBox_->setColumnWidth(AudioColumnDurations, 180);
+  applyAudioColumnVisibility();
   audioVariableBox_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   audioVariableBox_->setContextMenuPolicy(Qt::CustomContextMenu);
   audioVariableBox_->installEventFilter(this);
@@ -1718,7 +1852,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       } else if (watched == nonAudioVariableBox_) {
         auto* item = nonAudioVariableBox_->currentItem();
         const QString typeTag = item ? item->text(1) : QString();
-        if (item && (typeTag == "VECT" || typeTag.endsWith("-C"))) {
+        if (item && (typeTag == "TEXT" || typeTag == "HNDL" || typeTag == "BIN")) {
+          openPathDetailDeferred(item->text(0));
+        } else if (item && (typeTag == "VECT" || typeTag.endsWith("-C"))) {
           focusSignalGraphForSelected();
         }
       }
@@ -1780,6 +1916,15 @@ void MainWindow::loadPersistedRuntimeSettings() {
                                        .toInt(),
                                    kMinAsyncCapturePollMs,
                                    kMaxAsyncCapturePollMs);
+  audioColumnVisible_[AudioColumnName] = settings.value("runtime_settings/audio_columns/name", true).toBool();
+  audioColumnVisible_[AudioColumnChannels] =
+      settings.value("runtime_settings/audio_columns/channels", false).toBool();
+  audioColumnVisible_[AudioColumnRms] = settings.value("runtime_settings/audio_columns/dbrms", true).toBool();
+  audioColumnVisible_[AudioColumnSize] = settings.value("runtime_settings/audio_columns/size", false).toBool();
+  audioColumnVisible_[AudioColumnIntervals] =
+      settings.value("runtime_settings/audio_columns/intervals", false).toBool();
+  audioColumnVisible_[AudioColumnDurations] =
+      settings.value("runtime_settings/audio_columns/durations", true).toBool();
   if (!settings.contains("runtime_settings/sample_rate")) {
     return;
   }
@@ -1815,12 +1960,31 @@ void MainWindow::savePersistedRuntimeSettings() const {
   settings.setValue("runtime_settings/display_limit_bytes", cfg.displayLimitBytes);
   settings.setValue("runtime_settings/display_limit_str", cfg.displayLimitStr);
   settings.setValue("runtime_settings/async_capture_poll_ms", asyncCapturePollMs_);
+  settings.setValue("runtime_settings/audio_columns/name", audioColumnVisible_[AudioColumnName]);
+  settings.setValue("runtime_settings/audio_columns/channels", audioColumnVisible_[AudioColumnChannels]);
+  settings.setValue("runtime_settings/audio_columns/dbrms", audioColumnVisible_[AudioColumnRms]);
+  settings.setValue("runtime_settings/audio_columns/size", audioColumnVisible_[AudioColumnSize]);
+  settings.setValue("runtime_settings/audio_columns/intervals", audioColumnVisible_[AudioColumnIntervals]);
+  settings.setValue("runtime_settings/audio_columns/durations", audioColumnVisible_[AudioColumnDurations]);
 
   QStringList paths;
   for (const std::string& p : cfg.udfPaths) {
     paths.push_back(QString::fromStdString(p));
   }
   settings.setValue("runtime_settings/udf_paths", paths);
+}
+
+void MainWindow::applyAudioColumnVisibility() {
+  if (!audioVariableBox_) {
+    return;
+  }
+  for (int col = 0; col < AudioColumnCount; ++col) {
+    audioVariableBox_->setColumnHidden(col, !audioColumnVisible_[col]);
+    if (audioColumnVisible_[col] && audioVariableBox_->columnWidth(col) < 40) {
+      audioVariableBox_->resizeColumnToContents(col);
+      audioVariableBox_->setColumnWidth(col, std::max(60, audioVariableBox_->columnWidth(col)));
+    }
+  }
 }
 
 void MainWindow::loadPersistedWindowLayout() {
@@ -1846,10 +2010,17 @@ void MainWindow::loadPersistedWindowLayout() {
   }
 
   if (audioVariableBox_) {
+    // Migrate the old narrow RMS layout once; subsequent manual resizing is
+    // still restored normally.
+    if (!settings.value("ui/audio_chan_rms_widths_updated", false).toBool()) {
+      settings.setValue(QString("ui/audio_column_width_%1").arg(AudioColumnChannels), 45);
+      settings.setValue(QString("ui/audio_column_width_%1").arg(AudioColumnRms), 140);
+      settings.setValue("ui/audio_chan_rms_widths_updated", true);
+    }
     for (int col = 0; col < audioVariableBox_->columnCount(); ++col) {
       const QString key = QString("ui/audio_column_width_%1").arg(col);
       if (settings.contains(key)) {
-        audioVariableBox_->setColumnWidth(col, settings.value(key).toInt());
+        audioVariableBox_->setColumnWidth(col, std::max(col == AudioColumnChannels ? 45 : 60, settings.value(key).toInt()));
       }
     }
   }
@@ -1886,7 +2057,9 @@ void MainWindow::savePersistedWindowLayout() const {
   }
   if (audioVariableBox_) {
     for (int col = 0; col < audioVariableBox_->columnCount(); ++col) {
-      settings.setValue(QString("ui/audio_column_width_%1").arg(col), audioVariableBox_->columnWidth(col));
+      if (!audioVariableBox_->isColumnHidden(col)) {
+        settings.setValue(QString("ui/audio_column_width_%1").arg(col), audioVariableBox_->columnWidth(col));
+      }
     }
   }
   if (nonAudioVariableBox_) {
@@ -2255,8 +2428,11 @@ void MainWindow::undoObjectCommand() {
     return;
   }
 
+  current.label = checkpoint.label;
+  const QString historyLabel = checkpoint.label;
   redoStack_.push_back(std::move(current));
   cleanupObjectUndoCheckpoint(checkpoint);
+  addHistoryComment(QStringLiteral("// undo %1").arg(historyLabel));
   commandBox_->appendExecutionResult(QStringLiteral("Undid object change."));
   refreshVariables();
   refreshDebugView();
@@ -2286,9 +2462,12 @@ void MainWindow::redoObjectCommand() {
     return;
   }
 
+  current.label = checkpoint.label;
+  const QString historyLabel = checkpoint.label;
   undoStack_.push_back(std::move(current));
   pruneObjectUndoStack();
   cleanupObjectUndoCheckpoint(checkpoint);
+  addHistoryComment(QStringLiteral("// redo %1").arg(historyLabel));
   commandBox_->appendExecutionResult(QStringLiteral("Redid object change."));
   refreshVariables();
   refreshDebugView();
@@ -4012,10 +4191,29 @@ void MainWindow::refreshVariables() {
     const QString infoText = truncateDisplayText(v.preview);
     const QString fullInfo = QString::fromStdString(v.preview);
     if (v.isAudio) {
-      item->setText(1, QString::fromStdString(v.rms));
-      item->setText(2, QString::fromStdString(v.size));
-      item->setText(3, infoText);
-      item->setToolTip(3, fullInfo);
+      QString sizeText = QString::fromStdString(v.size);
+      QString intervalsText = infoText;
+      QString fullIntervalsText = fullInfo;
+      QString durationsText;
+      QString fullDurationsText;
+      const SignalDataPtr signalData = engine_.getSignalData(v.name);
+      if (signalData && signalData->isAudio && signalData->sampleRate > 0) {
+        if (!signalData->channels.empty() && allChannelTimelinesMatch(*signalData)) {
+          sizeText = QString::number(signalData->channels.front().samples.size());
+        }
+        fullIntervalsText = audioIntervalsText(*signalData);
+        intervalsText = truncateDisplayText(fullIntervalsText);
+        durationsText = audioDurationsText(*signalData);
+        fullDurationsText = durationsText;
+        durationsText = truncateDisplayText(fullDurationsText);
+      }
+      item->setText(AudioColumnChannels, QString::number(v.channels));
+      item->setText(AudioColumnRms, QString::fromStdString(v.rms));
+      item->setText(AudioColumnSize, sizeText);
+      item->setText(AudioColumnIntervals, intervalsText);
+      item->setToolTip(AudioColumnIntervals, fullIntervalsText);
+      item->setText(AudioColumnDurations, durationsText);
+      item->setToolTip(AudioColumnDurations, fullDurationsText);
     } else {
       item->setText(1, QString::fromStdString(v.typeTag));
       item->setText(2, QString::fromStdString(v.size));
@@ -4121,6 +4319,8 @@ void MainWindow::addHistoryComment(const QString& text) {
   item->setData(kHistoryCountRole, 0);
   item->setData(kHistoryIsCommentRole, true);
   item->setText(text);
+  historyBox_->setCurrentItem(item);
+  historyBox_->scrollToBottom();
 }
 
 void MainWindow::updateHistoryItemDisplay(QListWidgetItem* item) const {
@@ -4573,7 +4773,8 @@ void MainWindow::openPathDetail(const QString& path) {
     return;
   }
 
-  auto* w = new SignalTableWindow(path, *sig);
+  const auto cfg = engine_.runtimeSettings();
+  auto* w = new SignalTableWindow(path, *sig, cfg.displayLimitX, cfg.displayLimitY);
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Table);
   w->show();
@@ -4637,7 +4838,8 @@ bool MainWindow::openGraphicsPathDetail(const QString& path) {
   const QString value = graphicsHandleProperty(rootIds->front(), prop);
 
   if (const auto numeric = signalDataFromNumericDisplay(value); numeric.has_value()) {
-    auto* w = new SignalTableWindow(path, *numeric);
+    const auto cfg = engine_.runtimeSettings();
+    auto* w = new SignalTableWindow(path, *numeric, cfg.displayLimitX, cfg.displayLimitY);
     w->setAttribute(Qt::WA_DeleteOnClose, true);
     trackWindow(path, w, WindowKind::Table);
     w->show();
@@ -6189,6 +6391,14 @@ void MainWindow::reconcileScopedWindows() {
           g->updateData(graphSignalDataForDisplay(sig));
         }
       }
+    } else if (auto* table = qobject_cast<SignalTableWindow*>(it->window.data())) {
+      table->setEnabled(it->scope == currentScope);
+      if (it->scope == currentScope) {
+        auto sig = engine_.getSignalData(it->varName.toStdString());
+        if (sig) {
+          table->updateData(*sig);
+        }
+      }
     } else {
       it->window->setEnabled(it->scope == currentScope);
     }
@@ -6404,6 +6614,27 @@ void MainWindow::showSettingsDialog() {
   udfPathsEdit->setPlainText(pathLines.join("\n"));
   udfPathsEdit->setPlaceholderText("One path per line");
 
+  auto* audioColumnsGroup = new QGroupBox("Audio Object Columns", &dialog);
+  auto* audioColumnsLayout = new QVBoxLayout(audioColumnsGroup);
+  auto* nameColumnCheck = new QCheckBox("Name", audioColumnsGroup);
+  auto* channelsColumnCheck = new QCheckBox("Chan", audioColumnsGroup);
+  auto* rmsColumnCheck = new QCheckBox("dBRMS", audioColumnsGroup);
+  auto* sizeColumnCheck = new QCheckBox("Size", audioColumnsGroup);
+  auto* intervalsColumnCheck = new QCheckBox("Signal Intervals", audioColumnsGroup);
+  auto* durationsColumnCheck = new QCheckBox("Durations", audioColumnsGroup);
+  nameColumnCheck->setChecked(audioColumnVisible_[AudioColumnName]);
+  channelsColumnCheck->setChecked(audioColumnVisible_[AudioColumnChannels]);
+  rmsColumnCheck->setChecked(audioColumnVisible_[AudioColumnRms]);
+  sizeColumnCheck->setChecked(audioColumnVisible_[AudioColumnSize]);
+  intervalsColumnCheck->setChecked(audioColumnVisible_[AudioColumnIntervals]);
+  durationsColumnCheck->setChecked(audioColumnVisible_[AudioColumnDurations]);
+  audioColumnsLayout->addWidget(nameColumnCheck);
+  audioColumnsLayout->addWidget(channelsColumnCheck);
+  audioColumnsLayout->addWidget(rmsColumnCheck);
+  audioColumnsLayout->addWidget(sizeColumnCheck);
+  audioColumnsLayout->addWidget(intervalsColumnCheck);
+  audioColumnsLayout->addWidget(durationsColumnCheck);
+
   form->addRow("Sampling Rate", sampleRateSpin);
   form->addRow("Display Limit X", limitXSpin);
   form->addRow("Display Limit Y", limitYSpin);
@@ -6413,6 +6644,7 @@ void MainWindow::showSettingsDialog() {
   form->addRow("Callback Capture Poll", asyncCapturePollSpin);
   form->addRow("UDF Paths (one per line)", udfPathsEdit);
   layout->addLayout(form);
+  layout->addWidget(audioColumnsGroup);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
   layout->addWidget(buttons);
@@ -6454,7 +6686,15 @@ void MainWindow::showSettingsDialog() {
   if (asyncPollTimer_) {
     asyncPollTimer_->setInterval(asyncCapturePollMs_);
   }
+  audioColumnVisible_[AudioColumnName] = nameColumnCheck->isChecked();
+  audioColumnVisible_[AudioColumnChannels] = channelsColumnCheck->isChecked();
+  audioColumnVisible_[AudioColumnRms] = rmsColumnCheck->isChecked();
+  audioColumnVisible_[AudioColumnSize] = sizeColumnCheck->isChecked();
+  audioColumnVisible_[AudioColumnIntervals] = intervalsColumnCheck->isChecked();
+  audioColumnVisible_[AudioColumnDurations] = durationsColumnCheck->isChecked();
+  applyAudioColumnVisibility();
   savePersistedRuntimeSettings();
+  refreshVariables();
   statusBar()->showMessage("Runtime settings updated.", 2500);
 }
 
