@@ -1,17 +1,71 @@
-# Building auxlab2 on Windows and Linux
+# Building auxlab2
 
-`README.md` covers the macOS/Homebrew build. This document is the detailed
-procedure for Windows and Linux, including dependency installation, exact
-configure commands, packaging, and the failure modes that actually come up.
+The detailed build procedure for macOS, Windows, and Linux: dependency
+installation, exact configure commands, packaging, and the failure modes that
+actually come up.
 
 For the release/signing/notarization process and the smoke-test matrix, see
 [`RELEASE.md`](RELEASE.md). For packaging the engine on its own, see
 `../aux_engine/RELEASE_WINDOWS.md`.
 
+## Quick start (Windows)
+
+If the prerequisites below are installed, this is the whole build:
+
+```powershell
+$env:VCPKG_ROOT = "C:\dev\vcpkg"
+$env:QT_ROOT    = "C:\Qt\6.7.3\msvc2019_64"
+```
+
+```powershell
+cmake --preset windows
+cmake --build --preset windows
+.\build\Release\auxlab2.exe
+```
+
+`cmake --preset windows` supplies the generator, architecture, vcpkg toolchain,
+and configuration list from [`CMakePresets.json`](CMakePresets.json), so there
+is no long command line to copy and mistype. Use `--preset windows-vs2019` on a
+machine without VS 2022. `cmake --list-presets` shows what is available.
+
+The exe runs straight from `build\Release\` — a `POST_BUILD` step runs
+`windeployqt` into the build tree, so no manual deployment is needed.
+
+Prerequisites, in one pass:
+
+1. Visual Studio 2022 (or 2019) with *Desktop development with C++*.
+2. Qt 6.5+ MSVC 64-bit, **including the Qt Multimedia component** — it is not
+   installed by default, so verify it before configuring:
+   ```powershell
+   dir $env:QT_ROOT\lib\cmake\Qt6Multimedia
+   ```
+   If that path is missing, add it with the Qt Maintenance Tool. See
+   [First, confirm Qt Multimedia is actually installed](#first-confirm-qt-multimedia-is-actually-installed).
+3. `aux_engine` checked out as a sibling of `auxlab2`.
+4. vcpkg bootstrapped, with the three ports installed:
+   ```powershell
+   & "$env:VCPKG_ROOT\vcpkg.exe" install fftw3:x64-windows libsamplerate:x64-windows nlohmann-json:x64-windows
+   ```
+
+Set `VCPKG_ROOT` and `QT_ROOT` permanently so you do not repeat step one of the
+quick start every session:
+
+```powershell
+[Environment]::SetEnvironmentVariable("VCPKG_ROOT", "C:\dev\vcpkg", "User")
+[Environment]::SetEnvironmentVariable("QT_ROOT", "C:\Qt\6.7.3\msvc2019_64", "User")
+```
+
+The rest of this document is the detailed version: what each step does, and what
+to do when one of them fails.
+
 ## Contents
 
+- [Quick start (Windows)](#quick-start-windows)
 - [Common prerequisites](#common-prerequisites)
+- [macOS](#macos)
 - [Windows](#windows)
+  - [Confirm Qt Multimedia is installed](#first-confirm-qt-multimedia-is-actually-installed)
+  - [Qt version and toolset compatibility](#qt-version-and-toolset-compatibility)
 - [Linux](#linux)
 - [Shared CMake options](#shared-cmake-options)
 - [Known platform constraints](#known-platform-constraints)
@@ -45,8 +99,8 @@ directory is.
 | --- | --- | --- |
 | CMake >= 3.21 | both | 3.21 is the floor for `auxlab2` |
 | C++17 compiler | both | MSVC 2022, GCC, or Clang |
-| Qt 6 `Widgets` | auxlab2 | |
-| Qt 6 `Multimedia` | auxlab2 | audio playback/recording |
+| Qt 6.5+ `Widgets` | auxlab2 | 6.5 is the floor — `QPermission` API |
+| Qt 6.5+ `Multimedia` | auxlab2 | audio playback/recording |
 | FFTW3 | auxe | `find_package(fftw3/FFTW3)`, falls back to `find_library(fftw3)` |
 | libsamplerate | auxe | falls back to `find_library(samplerate)` / `samplerate-0` |
 | nlohmann-json | auxe | **config-mode only**: `find_package(nlohmann_json CONFIG REQUIRED)` |
@@ -58,6 +112,103 @@ packages and the vcpkg port both do.
 Use one toolchain family for the whole closure. Mixing an MSVC-built Qt with a
 MinGW-built FFTW, or a GCC-built Qt with a Clang-built engine, produces link
 errors or runtime crashes that look unrelated to the mismatch.
+
+---
+
+## macOS
+
+Homebrew is the supported dependency source. Apple Silicon prefixes
+(`/opt/homebrew`) are what the project tracks; Intel (`/usr/local`) paths are in
+the search list too.
+
+### 1. Install dependencies
+
+```bash
+brew install cmake qt fftw libsamplerate nlohmann-json
+```
+
+Xcode command line tools are also needed (`xcode-select --install`).
+
+### 2. Configure and build
+
+```bash
+cmake --preset macos
+cmake --build --preset macos -j
+```
+
+The `macos` preset sets `CMAKE_BUILD_TYPE=Release` and the Homebrew
+`CMAKE_PREFIX_PATH`. The equivalent explicit form:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qt;/opt/homebrew/opt/fftw;/opt/homebrew/opt/libsamplerate"
+cmake --build build -j
+```
+
+`CMakeLists.txt` already appends the Homebrew Qt/FFTW/libsamplerate prefixes on
+Apple, so a bare `cmake -S . -B build` usually resolves everything as well.
+
+### 3. Run
+
+```bash
+./build/auxlab2
+```
+
+macOS builds an app bundle, so the real executable is
+`build/auxlab2.app/Contents/MacOS/auxlab2-<version>`. A `POST_BUILD` step keeps
+`build/auxlab2` as a symlink to it, which is why the short path works and why it
+never points at a stale binary. Double-clicking `build/auxlab2.app` in Finder
+works too.
+
+Microphone access depends on `src/Info.plist.in`; recording needs OS permission
+and a usable input device.
+
+### 4. App icon
+
+To produce a Finder-launchable `.app` with a custom icon:
+
+1. Prepare a square PNG (recommended `1024x1024`).
+2. Generate the icon file:
+
+   ```bash
+   ./scripts/make_icns.sh /absolute/path/to/icon-1024.png
+   ```
+
+   This writes `resources/icons/auxlab2.icns`.
+
+3. Reconfigure and rebuild:
+
+   ```bash
+   cmake --preset macos
+   cmake --build --preset macos -j
+   ```
+
+If neither `resources/icons/auxlab2.icns` nor `resources/icons/auxlab-icon.png`
+exists, configure warns and the bundle gets the default icon — the build still
+succeeds.
+
+### 5. Install and package
+
+```bash
+cmake --install build --prefix /tmp/auxlab2-stage
+cmake --build build --target package
+```
+
+`package` produces a `DragNDrop` `.dmg`. The install step runs `macdeployqt`,
+bundles `libauxe.dylib` plus the Qt platform/multimedia plugins into
+`auxlab2.app`, writes `Contents/Resources/qt.conf`, and applies an ad-hoc
+signature. For a signed and notarized release artifact use
+[`scripts/release_macos.sh`](scripts/release_macos.sh) — see
+[`RELEASE.md`](RELEASE.md).
+
+### macOS troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `Qt6 (Widgets, Multimedia) not found` | `brew install qt`, or pass `-DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt`. |
+| `macdeployqt is required for macOS deployment but was not found` | Only affects install/package. Pass `-DQT_ROOT=$(brew --prefix qt)` or add Qt's `bin` to `PATH`. |
+| `macOS deployment needs macdeployqt and libqcocoa.dylib` warning | The hardcoded `libqcocoa.dylib` candidate paths in `CMakeLists.txt` are Homebrew-version-specific and may need updating after a Qt upgrade. Build/run are unaffected; only packaging is. |
+| App runs from the build tree but the `.app` shows a generic icon | Generate `resources/icons/auxlab2.icns` with `scripts/make_icns.sh`, then reconfigure. |
 
 ---
 
@@ -80,11 +231,63 @@ the `Visual Studio 17 2022` generator are the tested combination.
 Use the Qt online installer and select, under a Qt 6 version (6.5+ works;
 6.10/6.11 is what the macOS build tracks):
 
-- `MSVC 2022 64-bit`
-- `Qt Multimedia` (under *Additional Libraries* — it is **not** in the default
-  selection, and omitting it is the single most common configure failure)
+- the MSVC 64-bit build for that Qt version
+- `Qt Multimedia` (under *Additional Libraries*)
 
 This gives you a prefix like `C:\Qt\6.10.1\msvc2022_64`.
+
+#### First, confirm Qt Multimedia is actually installed
+
+This is the one real risk in the whole Qt step — Qt Multimedia is a separate
+component in the Qt installer and is **not** selected by default, so a normal
+"install Qt 6" leaves it out. Check before you configure:
+
+```powershell
+dir C:\Qt\6.7.3\msvc2019_64\lib\cmake\Qt6Multimedia
+```
+
+If that directory does not exist, add the component — you do not need to
+reinstall Qt. Run the **Qt Maintenance Tool** → *Add or remove components* →
+expand your Qt version → *Additional Libraries* → check **Qt Multimedia** →
+*Next*.
+
+Without it, configure stops at:
+
+```
+Qt6 (Widgets, Multimedia) not found.
+```
+
+which is the single most common first-time failure on Windows.
+
+#### Qt version and toolset compatibility
+
+**Minimum Qt is 6.5.** The app's newest Qt API is `QMicrophonePermission` /
+`QPermission` (Qt 6.5); everything else is Qt 6.0-era. There is no version floor
+in `CMakeLists.txt` and no `QT_VERSION` guards in the source, so any Qt >= 6.5
+works. 6.7.x and 6.10.x are both known-good.
+
+**ABI compatibility.** MSVC has been binary-compatible across VS 2015 / 2017 /
+2019 / 2022, so a Qt built with the v142 toolset links correctly into a VS 2022
+(v143) build. Qt's `msvc2019_64` directory name is just what Qt called their
+MSVC build at that point — Qt 6.7 never shipped an `msvc2022_64`. Nothing to
+work around: point `QT_ROOT` at whichever MSVC directory your Qt version
+actually has.
+
+| Qt version | Directory to point `QT_ROOT` at | Use with |
+| --- | --- | --- |
+| 6.5 – 6.7 | `C:\Qt\<ver>\msvc2019_64` | VS 2019 **or** VS 2022 |
+| 6.8+ | `C:\Qt\<ver>\msvc2022_64` | VS 2022 |
+
+Only the generator changes for an older Visual Studio; the Qt path does not.
+
+One caveat on direction: the guarantee covers linking *older* toolset output
+into a *newer* build, not the reverse. So if both VS 2019 and VS 2022 are
+installed, vcpkg builds its ports with v143 by default — pick VS 2022 as your
+generator in that case, so the final link is on the newest toolset among the
+inputs.
+
+Do not mix a MinGW Qt (`mingw_64`) into an MSVC build — that is a genuine ABI
+mismatch, unlike the toolset-name difference above.
 
 ### 3. Install the engine's dependencies with vcpkg
 
@@ -105,10 +308,20 @@ the install/package step.
 ### 4. Configure
 
 ```powershell
+# EDIT -G to match the Visual Studio you have installed:
+#   VS 2022 -> "Visual Studio 17 2022"
+#   VS 2019 -> "Visual Studio 16 2019"
+# and EDIT -DQT_ROOT to your actual Qt prefix (see the table above).
 cmake -S C:\dev\auxlab2 -B C:\dev\auxlab2\build `
   -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
   -DQT_ROOT="C:\Qt\6.10.1\msvc2022_64"
+```
+
+Check which generator you need with:
+
+```powershell
+& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -property displayName
 ```
 
 `QT_ROOT` is prepended to `CMAKE_PREFIX_PATH` before `find_package(Qt6)` and is
@@ -120,6 +333,8 @@ Ninja works too, from a *Developer PowerShell for VS 2022* prompt (so `cl.exe`
 is on `PATH`):
 
 ```powershell
+# EDIT -DQT_ROOT to your actual Qt prefix. Ninja needs no -G edit per VS
+# version, but the prompt must be the Developer PowerShell for your VS.
 cmake -S C:\dev\auxlab2 -B C:\dev\auxlab2\build -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
@@ -135,9 +350,36 @@ cmake --build C:\dev\auxlab2\build --config Release -j
 Visual Studio is a multi-config generator, so `--config` is required on every
 build/install/package invocation. `CMAKE_BUILD_TYPE` is ignored by it.
 
-The build produces `build\Release\auxlab2.exe`, `auxe.dll`, and — via a
-`POST_BUILD` copy of `$<TARGET_RUNTIME_DLLS:auxlab2>` — the Qt and vcpkg DLLs
-next to the executable, so the build tree is directly runnable.
+The build produces `build\Release\auxlab2.exe` and `auxe.dll`. Two `POST_BUILD`
+steps make the build tree runnable:
+
+1. `$<TARGET_RUNTIME_DLLS:auxlab2>` copies the DLLs the exe *imports* — Qt6Core,
+   Qt6Gui, Qt6Widgets, Qt6Multimedia, `fftw3*`, `samplerate*`.
+2. A plugin copy places `platforms\qwindows.dll` (plus the Widgets style and
+   Qt Multimedia backend plugins, when those targets exist in your Qt version)
+   into subdirectories next to the exe.
+
+Step 2 exists because Qt plugins are loaded at runtime through the plugin path
+rather than imported, so `TARGET_RUNTIME_DLLS` cannot see them. Without
+`platforms\qwindows.dll` the app builds fine and then dies at startup with:
+
+> This application failed to start because no Qt platform plugin could be
+> initialized. Reinstalling the application may fix this problem.
+
+If you hit that on an older checkout, either point Qt at its own plugins:
+
+```powershell
+$env:QT_PLUGIN_PATH = "C:\Qt\6.7.3\msvc2019_64\plugins"
+```
+
+or populate the build tree once with `windeployqt`:
+
+```powershell
+& "C:\Qt\6.7.3\msvc2019_64\bin\windeployqt.exe" C:\dev\auxlab2\build\Release\auxlab2.exe
+```
+
+`windeployqt` is the more complete of the two — it also brings the FFmpeg DLLs
+the Qt Multimedia backend needs, which the plugin copy alone does not.
 
 ### 6. Run from the build tree
 
@@ -191,15 +433,23 @@ A missing `platforms/qwindows.dll` is the classic cause of *"This application
 failed to start because no Qt platform plugin could be initialized"* on a clean
 machine.
 
+Qt 6.5+ defaults Qt Multimedia to the **FFmpeg** backend on Windows and ships
+its own FFmpeg DLLs in Qt's `bin\`. `windeployqt` normally copies them, but
+confirm `av*.dll` (`avformat`, `avcodec`, `avutil`, `swresample`, `swscale`) are
+in the archive. If they are missing, audio works on the build machine and fails
+on a clean one — the failure this checklist exists to catch.
+
 ### Windows troubleshooting
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `Qt6 (Widgets, Multimedia) not found` | Qt Multimedia not installed, or wrong prefix. Check `C:\Qt\<ver>\msvc2022_64\lib\cmake\Qt6Multimedia` exists. |
+| `Qt6 (Widgets, Multimedia) not found` | Qt Multimedia not installed, or wrong prefix. Check `C:\Qt\<ver>\msvc<year>_64\lib\cmake\Qt6Multimedia` exists; add the component with the Qt Maintenance Tool if not. |
+| `QPermission`/`QMicrophonePermission` undeclared | Qt older than 6.5. Upgrade Qt; there is no fallback path in the source. |
 | `Could not find a package configuration file provided by "nlohmann_json"` | vcpkg toolchain file not passed, or the port not installed for `x64-windows`. |
 | `Could not find any of: targets=[...] or libraries=[fftw3]` | Same — the engine's FFTW3/libsamplerate lookup ran without the vcpkg toolchain. |
 | `windeployqt not found` warning at configure | Neither Qt's exported tool path nor `QT_ROOT\bin` resolved. Pass `-DQT_ROOT=C:\Qt\<ver>\msvc2022_64`. Packaging will otherwise fall back to DLL scanning and miss Qt plugins. |
-| `unistd.h: No such file or directory` in `regression_record_callback.cpp` | Stale `aux_engine` checkout. This was POSIX-only and is fixed; pull `aux_engine`. Workaround: `-DAUXE_BUILD_TESTS=OFF`. |
+| `C1083: Cannot open include file: 'unistd.h'` at `regression_record_callback.cpp(11,10)` | Stale `aux_engine` checkout — this was POSIX-only and is fixed. Pull `aux_engine`; the two repos version independently, so updating only `auxlab2` does not help. Workaround: `-DAUXE_BUILD_TESTS=OFF`. Note this failure does not block `auxlab2.exe`, which is a separate target. |
+| `no Qt platform plugin could be initialized` when running from the build tree | `platforms\qwindows.dll` missing. Fixed by a `POST_BUILD` plugin copy; on older checkouts set `QT_PLUGIN_PATH` or run `windeployqt` against the build-tree exe. |
 | `LNK2019` on `__imp_aux*` symbols | `auxe.dll` built without `AUXE_BUILD_DLL`, i.e. `-DAUXE_BUILD_SHARED=OFF` mixed with a dllimport-expecting consumer. Keep `AUXE_BUILD_SHARED=ON`. |
 | `MinSizeRel` configuration errors from vcpkg | Constrain the config list: `-DCMAKE_CONFIGURATION_TYPES="Debug;Release"`. |
 | App icon warning at configure | `resources/icons/auxlab-icon.ico` or `resources/windows/auxlab2.rc` missing. Non-fatal; the exe gets the default icon. |
@@ -351,6 +601,7 @@ desktop menus.
 | --- | --- | --- |
 | `AUXLAB2_WIN32_GUI` | `ON` | Windows GUI subsystem (no console window) |
 | `AUXLAB2_ENABLE_QT_DEPLOYMENT` | `ON` | Run `windeployqt`/`macdeployqt` during install |
+| `AUXLAB2_DEPLOY_QT_BUILD_TREE` | `ON` | Windows: run `windeployqt` after linking so `build\<cfg>\auxlab2.exe` runs with no extra setup. Set `OFF` to skip it in tight edit-build loops. |
 | `AUXLAB2_ENABLE_CPACK` | `ON` | Register CPack generators |
 | `AUXLAB2_ENABLE_WINDOWS_NSIS` | `OFF` | Add NSIS installer alongside the ZIP |
 | `AUXLAB2_ENABLE_NATIVE_LINUX_PACKAGES` | `OFF` | Add DEB/RPM alongside the TGZ |

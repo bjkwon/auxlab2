@@ -1,3 +1,4 @@
+CMakeUserPresets.json
 build/
 build-release/
 build-console/

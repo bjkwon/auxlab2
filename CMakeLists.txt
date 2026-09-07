@@ -13,6 +13,7 @@ option(AUXLAB2_ENABLE_QT_DEPLOYMENT "Deploy Qt runtime pieces during install/pac
 option(AUXLAB2_ENABLE_CPACK "Enable CPack package generation" ON)
 option(AUXLAB2_ENABLE_NATIVE_LINUX_PACKAGES "Enable DEB/RPM generators in addition to TGZ on Linux" OFF)
 option(AUXLAB2_ENABLE_WINDOWS_NSIS "Enable NSIS installer generation on Windows" OFF)
+option(AUXLAB2_DEPLOY_QT_BUILD_TREE "Run windeployqt after linking so the Windows build tree runs with no extra setup" ON)
 
 set(AUXLAB2_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/VERSION")
 set(AUXE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/../aux_engine/VERSION")
@@ -372,6 +373,62 @@ if(WIN32)
             $<TARGET_RUNTIME_DLLS:auxlab2> $<TARGET_FILE_DIR:auxlab2>
     COMMAND_EXPAND_LISTS
   )
+
+  # $<TARGET_RUNTIME_DLLS> above only covers DLLs the executable *imports*. Qt
+  # plugins are loaded at runtime through the plugin path, so they are invisible
+  # to it, and without platforms/qwindows.dll the app builds fine and then dies
+  # at startup with "no Qt platform plugin could be initialized".
+  #
+  # Preferred fix: let windeployqt populate the build tree, exactly as the
+  # install/package step does. It also brings the FFmpeg DLLs that the Qt 6.5+
+  # Multimedia backend needs, which a plugin copy alone would miss. Repeat runs
+  # are cheap once everything is in place.
+  if(AUXLAB2_DEPLOY_QT_BUILD_TREE AND AUXLAB2_WINDEPLOYQT_EXECUTABLE)
+    add_custom_command(TARGET auxlab2 POST_BUILD
+      COMMAND "${AUXLAB2_WINDEPLOYQT_EXECUTABLE}"
+              "$<IF:$<CONFIG:Debug>,--debug,--release>"
+              --no-translations
+              --no-opengl-sw
+              --no-system-d3d-compiler
+              "$<TARGET_FILE:auxlab2>"
+      COMMENT "windeployqt: populating Qt runtime in the build tree"
+      VERBATIM
+    )
+  elseif(AUXLAB2_DEPLOY_QT_BUILD_TREE)
+    # Fallback when windeployqt was not found: copy at least the plugins we know
+    # about so the app can start. Multimedia may still be non-functional.
+    # Plugin target names vary across Qt versions, hence the TARGET guards.
+    message(WARNING
+      "windeployqt not found, so the build tree gets a reduced Qt plugin set and "
+      "audio may not work when running from build/. Pass -DQT_ROOT=<qt-prefix> "
+      "for a complete build-tree deployment."
+    )
+    set(AUXLAB2_QT_BUILD_TREE_PLUGINS
+      "Qt6::QWindowsIntegrationPlugin"   platforms
+      "Qt6::QWindowsVistaStylePlugin"    styles
+      "Qt6::QModernWindowsStylePlugin"   styles
+      "Qt6::QFFmpegMediaPlugin"          multimedia
+      "Qt6::QWindowsMediaPlugin"         multimedia
+    )
+    list(LENGTH AUXLAB2_QT_BUILD_TREE_PLUGINS _n)
+    math(EXPR _last "${_n} / 2 - 1")
+    foreach(_i RANGE ${_last})
+      math(EXPR _ti "${_i} * 2")
+      math(EXPR _di "${_ti} + 1")
+      list(GET AUXLAB2_QT_BUILD_TREE_PLUGINS ${_ti} _plugin_target)
+      list(GET AUXLAB2_QT_BUILD_TREE_PLUGINS ${_di} _plugin_subdir)
+      if(TARGET ${_plugin_target})
+        add_custom_command(TARGET auxlab2 POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E make_directory
+                  "$<TARGET_FILE_DIR:auxlab2>/${_plugin_subdir}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                  "$<TARGET_FILE:${_plugin_target}>"
+                  "$<TARGET_FILE_DIR:auxlab2>/${_plugin_subdir}/"
+          VERBATIM
+        )
+      endif()
+    endforeach()
+  endif()
 endif()
 
 if(AUXLAB2_ENABLE_CPACK)

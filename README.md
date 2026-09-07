@@ -14,75 +14,51 @@ Qt-based GUI application built on top of `auxe` (AUX Engine).
 
 ## Workspace Layout
 
-`auxlab2` is intended to live as a sibling of `aux_engine`:
+`auxlab2` requires `aux_engine` checked out as a sibling directory:
 
-- `/Users/bkwon/dev/aux_engine`
-- `/Users/bkwon/dev/auxlab2`
-
-The CMake project links to `aux_engine` via:
-
-- `add_subdirectory(../aux_engine ...)`
-
-## Requirements (macOS/Homebrew)
-
-For Windows and Linux, see [`BUILDING.md`](BUILDING.md).
-
-- `cmake`
-- Qt 6 (`qt`)
-- `fftw`
-- `libsamplerate`
-- `nlohmann-json`
-
-Example install:
-
-```bash
-brew install cmake qt fftw libsamplerate nlohmann-json
+```
+<workspace>/
+  aux_engine/
+  auxlab2/
 ```
 
-## Build (macOS)
+The CMake project builds the engine from source via
+`add_subdirectory(../aux_engine ...)`, so the directory must be named exactly
+`aux_engine`. There is no submodule and no prebuilt-engine option.
+
+## Building
+
+**See [`BUILDING.md`](BUILDING.md) for build instructions.** It covers macOS,
+Windows, and Linux: dependency installation, configure commands, packaging, and
+per-platform troubleshooting.
+
+Once the prerequisites for your platform are installed, CMake presets reduce the
+build to two commands:
 
 ```bash
-cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build \
-  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qt;/opt/homebrew/opt/fftw;/opt/homebrew/opt/libsamplerate"
-
-cmake --build /Users/bkwon/dev/auxlab2/build -j
+cmake --preset macos     # or: linux
+cmake --build --preset macos
 ```
 
-Windows and Linux builds — dependency installation, configure commands,
-packaging, and troubleshooting — are documented in
-[`BUILDING.md`](BUILDING.md).
+```powershell
+cmake --preset windows   # or: windows-vs2019
+cmake --build --preset windows
+```
 
-## Run
+`cmake --list-presets` shows the presets available on your host. The Windows
+preset expects the `VCPKG_ROOT` and `QT_ROOT` environment variables to be set.
+
+Then run:
 
 ```bash
-/Users/bkwon/dev/auxlab2/build/auxlab2
+./build/auxlab2
 ```
 
-## App Icon (macOS)
-
-To produce a Finder-launchable `.app` with a custom icon:
-
-1. Prepare a square PNG (recommended `1024x1024`).
-2. Generate the icon file:
-
-```bash
-/Users/bkwon/dev/auxlab2/scripts/make_icns.sh /absolute/path/to/icon-1024.png
+```powershell
+.\build\Release\auxlab2.exe
 ```
 
-This writes:
-
-- `/Users/bkwon/dev/auxlab2/resources/icons/auxlab2.icns`
-
-3. Reconfigure/build:
-
-```bash
-cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build
-cmake --build /Users/bkwon/dev/auxlab2/build -j
-```
-
-4. Launch by double-clicking:
-
-- `/Users/bkwon/dev/auxlab2/build/auxlab2.app`
+Release, signing, and notarization live in [`RELEASE.md`](RELEASE.md).
 
 ## UI Behavior Summary
 
