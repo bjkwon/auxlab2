@@ -75,12 +75,14 @@ if(APPLE)
   )
 endif()
 
-find_package(Qt6 QUIET COMPONENTS Widgets Multimedia)
-if(WIN32)
-   if(DEFINE_QT_ROOT)
-      list(APPEND CMAKE_PREFIX_PATH "${QT_ROOT}")
-   endif()
+# QT_ROOT is an optional convenience knob for release machines (mainly Windows,
+# where Qt is not on any default search path). It has to be on CMAKE_PREFIX_PATH
+# before find_package(Qt6) to have any effect.
+if(QT_ROOT)
+  list(APPEND CMAKE_PREFIX_PATH "${QT_ROOT}")
 endif()
+
+find_package(Qt6 QUIET COMPONENTS Widgets Multimedia)
 
 if(APPLE)
   include("${Qt6_DIR}/../Qt6Core/Qt6QDarwinMicrophonePermissionPluginConfig.cmake" OPTIONAL)
@@ -92,16 +94,31 @@ if(NOT Qt6_FOUND)
     "Install Qt6 and re-run configure with one of:\n"
     "  cmake -S . -B build -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt\n"
     "  cmake -S . -B build -DCMAKE_PREFIX_PATH=/usr/local/opt/qt\n"
+    "  cmake -S . -B build -DQT_ROOT=C:/Qt/6.10.1/msvc2022_64\n"
     "If not installed (Homebrew): brew install qt"
   )
 endif()
 
+# Qt's own config exports where its tools live. Prefer that over hand-maintained
+# hints so windeployqt/macdeployqt are found from a plain -DCMAKE_PREFIX_PATH
+# configure, without also requiring -DQT_ROOT.
+set(AUXLAB2_QT_TOOL_HINTS "")
+if(QT6_INSTALL_PREFIX AND QT6_INSTALL_BINS)
+  list(APPEND AUXLAB2_QT_TOOL_HINTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
+endif()
+if(Qt6_DIR)
+  # Qt6_DIR is <prefix>/lib/cmake/Qt6
+  list(APPEND AUXLAB2_QT_TOOL_HINTS "${Qt6_DIR}/../../../bin")
+endif()
+list(APPEND AUXLAB2_QT_TOOL_HINTS
+  "${QT_ROOT}/bin"
+  "/opt/homebrew/opt/qt/bin"
+  "/usr/local/opt/qt/bin"
+)
+
 find_program(AUXLAB2_MACDEPLOYQT_EXECUTABLE
   NAMES macdeployqt
-  HINTS
-    "${QT_ROOT}/bin"
-    "/opt/homebrew/opt/qt/bin"
-    "/usr/local/opt/qt/bin"
+  HINTS ${AUXLAB2_QT_TOOL_HINTS}
 )
 find_program(AUXLAB2_CODESIGN_EXECUTABLE
   NAMES codesign
@@ -110,8 +127,7 @@ find_program(AUXLAB2_CODESIGN_EXECUTABLE
 )
 find_program(AUXLAB2_WINDEPLOYQT_EXECUTABLE
   NAMES windeployqt
-  HINTS
-    "${QT_ROOT}/bin"
+  HINTS ${AUXLAB2_QT_TOOL_HINTS}
 )
 
 set(AUXLAB2_MACOS_QT_PLATFORM_PLUGIN_CANDIDATES

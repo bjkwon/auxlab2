@@ -1,4 +1,11 @@
 build/
+build-release/
+build-console/
+stage/
+_CPack_Packages/
+*.dmg
+*.zip
+*.tar.gz
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake

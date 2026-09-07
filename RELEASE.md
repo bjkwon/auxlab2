@@ -2,6 +2,11 @@
 
 This document turns `auxlab2` into a repeatable release process for Windows, macOS, and Linux. It covers the build inputs, packaging outputs, signing steps, and validation checks needed before publishing a versioned release.
 
+Related documents:
+
+- [`BUILDING.md`](BUILDING.md) — detailed Windows and Linux build setup, dependency installation, and troubleshooting.
+- `../aux_engine/RELEASE_WINDOWS.md` — generating a standalone `auxe` SDK package on Windows.
+
 ## Goals
 
 - Produce a clean install tree from CMake instead of shipping from the build tree.
@@ -136,9 +141,14 @@ cmake --install /Users/bkwon/dev/auxlab2/build-release \
 ```powershell
 cmake -S C:\Users\you\dev\auxlab2 -B C:\Users\you\dev\auxlab2\build-release `
   -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_PREFIX_PATH="C:\Qt\6.10.1\msvc2022_64" `
+  -DQT_ROOT="C:\Qt\6.10.1\msvc2022_64" `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 ```
+
+`QT_ROOT` is prepended to `CMAKE_PREFIX_PATH` and also hints `windeployqt`.
+`-DCMAKE_PREFIX_PATH=` works for finding Qt too; `windeployqt` is then located
+from Qt's own exported tool paths. See [`BUILDING.md`](BUILDING.md) for the full
+Windows setup.
 
 ### Packaging Notes
 
@@ -269,6 +279,9 @@ spctl --assess --type open --verbose=4 /Users/bkwon/dev/auxlab2/build-release/au
 ### Packaging options
 
 - `TGZ` is enabled by default and is the lowest-friction artifact.
+- The TGZ is **not** self-contained: the deploy script excludes `/lib`,
+  `/usr/lib`, and `/usr/local/lib`, so distro Qt/FFTW/libsamplerate are not
+  bundled and must be installed on the target machine.
 - `DEB` and `RPM` can be enabled with:
 
 ```bash

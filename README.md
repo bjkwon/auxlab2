@@ -25,6 +25,8 @@ The CMake project links to `aux_engine` via:
 
 ## Requirements (macOS/Homebrew)
 
+For Windows and Linux, see [`BUILDING.md`](BUILDING.md).
+
 - `cmake`
 - Qt 6 (`qt`)
 - `fftw`
@@ -37,7 +39,7 @@ Example install:
 brew install cmake qt fftw libsamplerate nlohmann-json
 ```
 
-## Build
+## Build (macOS)
 
 ```bash
 cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build \
@@ -45,6 +47,10 @@ cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build \
 
 cmake --build /Users/bkwon/dev/auxlab2/build -j
 ```
+
+Windows and Linux builds — dependency installation, configure commands,
+packaging, and troubleshooting — are documented in
+[`BUILDING.md`](BUILDING.md).
 
 ## Run
 

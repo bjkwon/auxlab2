@@ -40,6 +40,8 @@ cmake --build /Users/bkwon/dev/auxlab2/build-release --config Release -j
 cmake --build /Users/bkwon/dev/auxlab2/build-release --target package --config Release
 ```
 
+Windows and Linux builds are documented in detail in `BUILDING.md`.
+
 Important CMake options:
 
 - `AUXLAB2_ENABLE_QT_DEPLOYMENT=ON|OFF`
@@ -108,6 +110,8 @@ There is no dedicated lint or formatter target. Match the local Qt/C++17 style a
 ## Documents To Consult
 
 - `README.md`: app features, local build/run commands, and UI behavior summary.
+- `BUILDING.md`: detailed Windows and Linux build setup, CMake options, packaging, and per-platform troubleshooting.
+- `/Users/bkwon/dev/aux_engine/RELEASE_WINDOWS.md`: generating a standalone `auxe` SDK package on Windows.
 - `/Users/bkwon/dev/aux_engine/AGENTS.md`: engine/library boundaries and verification.
 - `/Users/bkwon/dev/aux_engine/GRAPHICS_RUNTIME_BACKEND_SPLIT.md`: runtime-vs-rendering split.
 - `/Users/bkwon/dev/aux_engine/GRAPHICS_MIGRATION_ROADMAP.md`: graphics migration direction; verify against current code before treating tasks as pending.
