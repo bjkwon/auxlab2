@@ -1,4 +1,8 @@
-2026-09-04 version 0.9.9
+2026-09-13 auxe 2.5.2 bug fix wave() UpdateBuffer buffer overflow crashing
+================================
+2026-09-09 version 0.9.9 comes with auxe 2.4.1; class definition and management of auxe being reviewed and revised. 
+================================
+2026-09-04 version 0.9.9 
 ================================
 2026-09-04 Object list view Table viewing improved: Use a different color gray for top row or left column; display up to "Display Limit"; remembers the last position and size so close and open it again at the last position; top row or left-most column pinned
 ================================
