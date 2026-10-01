@@ -103,6 +103,14 @@ UdfDebugWindow::UdfDebugWindow(QWidget* parent) : QMainWindow(parent) {
   updateSaveEnabled();
 }
 
+QStringList UdfDebugWindow::openFilePaths() const {
+  QStringList out;
+  for (int i = 0; i < tabs_->count(); ++i) {
+    out.push_back(tabs_->tabToolTip(i));
+  }
+  return out;
+}
+
 int UdfDebugWindow::findTabByPath(const QString& filePath) const {
   for (int i = 0; i < tabs_->count(); ++i) {
     if (tabs_->tabToolTip(i) == filePath) {

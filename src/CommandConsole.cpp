@@ -69,6 +69,10 @@ void CommandConsole::dragMoveEvent(QDragMoveEvent* event) {
 }
 
 void CommandConsole::dropEvent(QDropEvent* event) {
+  if (busy_) {
+    event->ignore();
+    return;
+  }
   const QString text = quotedPathListFromMimeData(event->mimeData());
   if (text.isEmpty()) {
     QPlainTextEdit::dropEvent(event);
@@ -98,12 +102,20 @@ QString CommandConsole::currentCommand() const {
   c.setPosition(inputStartPos_);
   c.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
   QString out = c.selectedText();
-  out.replace(QChar(0x2029), '\n');
+  // selectedText() reports paragraph breaks (Enter, paste) as U+2029 and soft line breaks
+  // (Shift+Enter) as U+2028; the engine only understands '\n'.
+  out.replace(QChar(QChar::ParagraphSeparator), '\n');
+  out.replace(QChar(QChar::LineSeparator), '\n');
   return out;
 }
 
 void CommandConsole::setPrompt(const QString& prompt) {
   if (prompt == prompt_) {
+    return;
+  }
+  if (busy_) {
+    // No prompt is on screen while busy; endBusy() prints the latest one.
+    prompt_ = prompt;
     return;
   }
 
@@ -125,6 +137,9 @@ void CommandConsole::setPrompt(const QString& prompt) {
 }
 
 void CommandConsole::setCurrentCommand(const QString& cmd) {
+  if (busy_) {
+    return;
+  }
   QTextCursor c(document());
   c.setPosition(inputStartPos_);
   c.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
@@ -138,10 +153,20 @@ void CommandConsole::setCurrentCommand(const QString& cmd) {
 }
 
 void CommandConsole::submitCurrentCommand() {
+  if (busy_) {
+    return;
+  }
   emit commandSubmitted(currentCommand());
 }
 
 void CommandConsole::appendExecutionResult(const QString& output) {
+  if (busy_) {
+    // Part of a multi-segment submission: show the output, keep the prompt for endBusy().
+    if (!output.isEmpty()) {
+      appendBusyOutput(output.endsWith('\n') ? output : output + '\n');
+    }
+    return;
+  }
   QTextCursor c(document());
   c.movePosition(QTextCursor::End);
   c.insertText("\n");
@@ -157,6 +182,13 @@ void CommandConsole::appendExecutionResult(const QString& output) {
 
 void CommandConsole::appendAsyncOutput(const QString& output) {
   if (output.trimmed().isEmpty()) {
+    return;
+  }
+  if (busy_) {
+    if (!documentEndsWithNewline()) {
+      appendBusyOutput(QStringLiteral("\n"));
+    }
+    appendBusyOutput(output.endsWith('\n') ? output : output + '\n');
     return;
   }
 
@@ -185,9 +217,83 @@ void CommandConsole::appendAsyncOutput(const QString& output) {
   ensureEditableCursor();
 }
 
+void CommandConsole::beginBusy() {
+  if (busy_) {
+    return;
+  }
+  QTextCursor c(document());
+  c.movePosition(QTextCursor::End);
+  c.insertText("\n");
+  setTextCursor(c);
+  busy_ = true;
+  setReadOnly(true);
+  ensureCursorVisible();
+}
+
+void CommandConsole::appendBusyOutput(const QString& output) {
+  if (output.isEmpty()) {
+    return;
+  }
+  QString text = output;
+  text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+  text.remove(QLatin1Char('\r'));
+  QTextCursor c(document());
+  c.movePosition(QTextCursor::End);
+  c.insertText(text);
+  setTextCursor(c);
+  ensureCursorVisible();
+}
+
+void CommandConsole::endBusy() {
+  if (!busy_) {
+    return;
+  }
+  busy_ = false;
+  setReadOnly(false);
+  if (!documentEndsWithNewline()) {
+    QTextCursor c(document());
+    c.movePosition(QTextCursor::End);
+    c.insertText("\n");
+  }
+  appendPrompt();
+}
+
+bool CommandConsole::documentEndsWithNewline() const {
+  QTextCursor c(document());
+  c.movePosition(QTextCursor::End);
+  if (!c.movePosition(QTextCursor::PreviousCharacter, QTextCursor::KeepAnchor)) {
+    return true;  // empty document
+  }
+  const QString last = c.selectedText();
+  return last == QStringLiteral("\n") || last == QString(QChar(0x2029));
+}
+
+bool CommandConsole::isInterruptKey(QKeyEvent* event) const {
+  if (event->key() != Qt::Key_C) {
+    return false;
+  }
+#ifdef Q_OS_MAC
+  // Qt maps the physical Control key to MetaModifier on macOS; Cmd+C stays Copy.
+  return (event->modifiers() & Qt::MetaModifier) != 0;
+#else
+  // Ctrl+C copies when text is selected, otherwise interrupts.
+  return (event->modifiers() & Qt::ControlModifier) != 0 && !textCursor().hasSelection();
+#endif
+}
+
 void CommandConsole::keyPressEvent(QKeyEvent* event) {
   const int key = event->key();
   const auto mods = event->modifiers();
+
+  if (busy_) {
+    if (isInterruptKey(event)) {
+      emit interruptRequested();
+    } else if (event->matches(QKeySequence::Copy)) {
+      copy();
+    }
+    event->accept();
+    return;
+  }
 
   if (event->matches(QKeySequence::Copy)) {
     QTextCursor c = textCursor();

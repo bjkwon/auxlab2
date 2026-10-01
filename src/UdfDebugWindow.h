@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QHash>
 #include <QSet>
+#include <QStringList>
 
 class QLabel;
 class QPushButton;
@@ -19,6 +20,7 @@ public:
   void setFile(const QString& filePath);
   void closeFile(const QString& filePath);
   QString currentFilePath() const;
+  QStringList openFilePaths() const;
   void setPauseLocation(const QString& filePath, int lineNumber);
   void setPaused(bool paused);
   int cursorLine() const;

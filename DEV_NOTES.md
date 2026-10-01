@@ -1,3 +1,5 @@
+2026-10-01 0.9.9.b auxe 2.6.1 console: run '#' lines as OS shell commands;
+================================
 2026-09-13 auxe 2.5.2 bug fix wave() UpdateBuffer buffer overflow crashing
 ================================
 2026-09-09 version 0.9.9 comes with auxe 2.4.1; class definition and management of auxe being reviewed and revised. 

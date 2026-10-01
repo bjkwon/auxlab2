@@ -11,17 +11,21 @@
 #include <QPointer>
 #include <QRect>
 #include <QByteArray>
+#include <QStringDecoder>
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
 #include <array>
+#include <deque>
 #include <map>
+#include <memory>
 #include <vector>
 
 class QListWidget;
 class QListWidgetItem;
 class QAudioSource;
 class QIODevice;
+class QProcess;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QAction;
@@ -98,8 +102,22 @@ private:
   void buildMenus();
   void connectSignals();
 
+  // Console lines starting with '#' are OS shell commands (auxlab2 only). A submission is split
+  // into shell and AUX segments that run in order, stopping at the first failure.
+  struct CommandSegment {
+    bool isShell = false;
+    QString text;  // shell: the command after '#'; AUX: the code lines between shell lines
+  };
+
   void runCommand(const QString& cmd, bool addToHistory = true);
   void runCommandInternal(const QString& cmd, bool addToHistory, bool allowUndoCheckpoint);
+  bool splitShellSegments(const QString& cmd, std::vector<CommandSegment>& segments, QString& err) const;
+  void runNextCommandSegment();
+  void finishCommandSegments();
+  bool runBuiltinShellCommand(const QString& shellCmd, QString& output, bool& ok);
+  bool changeWorkingDirectory(const QString& arg, QString& output);
+  void startShellProcess(const QString& shellCmd);
+  void interruptShellProcess();
   bool isUndoCommand(const QString& cmd) const;
   bool isRedoCommand(const QString& cmd) const;
   bool shouldCreateObjectUndoCheckpoint(const QString& cmd) const;
@@ -319,6 +337,13 @@ private:
   std::vector<ObjectUndoCheckpoint> undoStack_;
   std::vector<ObjectUndoCheckpoint> redoStack_;
   int undoCheckpointSerial_ = 0;
+
+  std::deque<CommandSegment> pendingSegments_;
+  QProcess* shellProcess_ = nullptr;
+  std::unique_ptr<QStringDecoder> shellDecoder_;
+  bool shellInterrupted_ = false;
+  bool lastEvalFailed_ = false;
+  QString previousWorkingDir_;
 
   QString currentUdfFilePath_;
   QString currentUdfName_;

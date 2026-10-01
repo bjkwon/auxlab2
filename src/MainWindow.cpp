@@ -43,6 +43,7 @@
 #include <QIODevice>
 #include <QPlainTextEdit>
 #include <QPermissions>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
@@ -63,6 +64,12 @@
 #include <cstring>
 #include <limits>
 #include <unordered_set>
+
+#ifndef Q_OS_WIN
+#include <csignal>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
 
 namespace {
 constexpr int kMaxRecentUdfFiles = 8;
@@ -479,6 +486,49 @@ QStringList splitTopLevelStatements(const QString& text) {
     out.push_back(current.trimmed());
   }
   return out;
+}
+
+// Updates block nesting (if/for/while/switch/try/function ... end) and bracket nesting across
+// one line of AUX code, so '#' shell lines can be rejected inside a block. "end" inside
+// brackets is an index (x(end)), and ".end"/".if" are member names; neither counts.
+void scanAuxLineNesting(const QString& line, int& blockDepth, int& groupDepth) {
+  static const QSet<QString> kBlockOpeners = {
+      QStringLiteral("if"), QStringLiteral("for"), QStringLiteral("while"),
+      QStringLiteral("switch"), QStringLiteral("try"), QStringLiteral("function")};
+  bool inString = false;
+  for (int i = 0; i < line.size(); ++i) {
+    const QChar ch = line[i];
+    if (ch == '"') {
+      inString = !inString;  // "" inside a string toggles twice, which is still correct
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (ch == '/' && i + 1 < line.size() && line[i + 1] == '/') {
+      return;
+    }
+    if (ch == '(' || ch == '[' || ch == '{') {
+      ++groupDepth;
+    } else if (ch == ')' || ch == ']' || ch == '}') {
+      groupDepth = std::max(0, groupDepth - 1);
+    } else if (ch.isLetter() || ch == '_') {
+      int j = i;
+      while (j < line.size() && (line[j].isLetterOrNumber() || line[j] == '_')) {
+        ++j;
+      }
+      const QString word = line.mid(i, j - i);
+      const bool isMember = i > 0 && line[i - 1] == '.';
+      if (!isMember && groupDepth == 0) {
+        if (kBlockOpeners.contains(word)) {
+          ++blockDepth;
+        } else if (word == QStringLiteral("end")) {
+          blockDepth = std::max(0, blockDepth - 1);
+        }
+      }
+      i = j - 1;
+    }
+  }
 }
 
 bool isSimpleIdentifier(const QString& text) {
@@ -1012,6 +1062,17 @@ MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
+  if (shellProcess_ && shellProcess_->state() != QProcess::NotRunning) {
+    // Don't leave a running shell command (or its pipeline) behind.
+    shellProcess_->disconnect(this);
+#ifndef Q_OS_WIN
+    if (shellProcess_->processId() > 0) {
+      ::kill(-static_cast<pid_t>(shellProcess_->processId()), SIGKILL);
+    }
+#endif
+    shellProcess_->kill();
+    shellProcess_->waitForFinished(1000);
+  }
   engine_.clearGraphicsBackend();
   engine_.clearPlaybackBackend();
   if (varAudioSink_) {
@@ -1658,6 +1719,7 @@ void MainWindow::connectSignals() {
   connect(commandBox_, &CommandConsole::commandSubmitted, this, [this](const QString& cmd) {
     runCommand(cmd);
   });
+  connect(commandBox_, &CommandConsole::interruptRequested, this, &MainWindow::interruptShellProcess);
   connect(commandBox_, &CommandConsole::historyNavigateRequested, this, &MainWindow::navigateHistoryFromCommand);
   connect(commandBox_, &CommandConsole::reverseSearchRequested, this, &MainWindow::reverseSearchFromCommand);
   connect(commandBox_, &CommandConsole::objectUndoRequested, this, &MainWindow::undoObjectCommand);
@@ -2287,7 +2349,300 @@ void MainWindow::setBreakpointAtLine(int lineNumber, bool enable) {
 }
 
 void MainWindow::runCommand(const QString& cmd, bool addToHistory) {
-  runCommandInternal(cmd, addToHistory, true);
+  if (commandBox_->isBusy()) {
+    statusBar()->showMessage(QStringLiteral("A shell command is running; press Ctrl+C to stop it."), 2500);
+    return;
+  }
+
+  std::vector<CommandSegment> segments;
+  QString err;
+  const bool hasShell = splitShellSegments(cmd, segments, err);
+  if (!err.isEmpty()) {
+    if (addToHistory) {
+      addHistory(cmd);
+    }
+    commandBox_->appendExecutionResult(QStringLiteral("Error: %1").arg(err));
+    historyNavIndex_ = -1;
+    historyDraft_.clear();
+    reverseSearchActive_ = false;
+    reverseSearchTerm_.clear();
+    reverseSearchIndex_ = -1;
+    return;
+  }
+  if (!hasShell) {
+    runCommandInternal(cmd, addToHistory, true);
+    return;
+  }
+
+  if (addToHistory) {
+    addHistory(cmd);
+  }
+  pendingSegments_.assign(segments.begin(), segments.end());
+  commandBox_->beginBusy();
+  runNextCommandSegment();
+}
+
+bool MainWindow::splitShellSegments(const QString& cmd, std::vector<CommandSegment>& segments,
+                                    QString& err) const {
+  segments.clear();
+  err.clear();
+  const QStringList lines = cmd.split(QLatin1Char('\n'));
+  QStringList auxLines;
+  int blockDepth = 0;
+  int groupDepth = 0;
+  bool hasShell = false;
+
+  auto flushAuxLines = [&]() {
+    const QString code = auxLines.join(QLatin1Char('\n'));
+    if (!code.trimmed().isEmpty()) {
+      segments.push_back({false, code});
+    }
+    auxLines.clear();
+  };
+
+  for (int i = 0; i < lines.size(); ++i) {
+    const QString trimmed = lines[i].trimmed();
+    if (trimmed.startsWith(QLatin1Char('#'))) {
+      if (blockDepth > 0 || groupDepth > 0) {
+        err = QStringLiteral("shell (#) line not allowed inside a block (line %1).").arg(i + 1);
+        return false;
+      }
+      flushAuxLines();
+      segments.push_back({true, trimmed.mid(1).trimmed()});
+      hasShell = true;
+      continue;
+    }
+    auxLines.push_back(lines[i]);
+    scanAuxLineNesting(lines[i], blockDepth, groupDepth);
+  }
+  flushAuxLines();
+  return hasShell;
+}
+
+void MainWindow::runNextCommandSegment() {
+  while (!pendingSegments_.empty()) {
+    const CommandSegment segment = pendingSegments_.front();
+    pendingSegments_.pop_front();
+
+    if (!segment.isShell) {
+      lastEvalFailed_ = false;
+      runCommandInternal(segment.text, false, true);
+      if (lastEvalFailed_ || engine_.isPaused()) {
+        finishCommandSegments();
+        return;
+      }
+      continue;
+    }
+
+    if (segment.text.isEmpty()) {
+      continue;
+    }
+    QString output;
+    bool ok = true;
+    if (runBuiltinShellCommand(segment.text, output, ok)) {
+      if (!output.isEmpty()) {
+        commandBox_->appendBusyOutput(output + QLatin1Char('\n'));
+      }
+      if (!ok) {
+        finishCommandSegments();
+        return;
+      }
+      continue;
+    }
+
+    startShellProcess(segment.text);
+    return;  // continues from the process's finished handler
+  }
+  finishCommandSegments();
+}
+
+void MainWindow::finishCommandSegments() {
+  if (!pendingSegments_.empty()) {
+    const int skipped = static_cast<int>(pendingSegments_.size());
+    commandBox_->appendBusyOutput(
+        QStringLiteral("(%1 remaining command%2 skipped)\n").arg(skipped).arg(skipped == 1 ? "" : "s"));
+    pendingSegments_.clear();
+  }
+  commandBox_->endBusy();
+  updateCommandPrompt();
+  historyNavIndex_ = -1;
+  historyDraft_.clear();
+  reverseSearchActive_ = false;
+  reverseSearchTerm_.clear();
+  reverseSearchIndex_ = -1;
+}
+
+// Handles '#pwd' and '#cd' in-process: a child shell's cd would not outlive the child. A cd
+// combined with shell operators or variables (e.g. "cd build && make") runs in the shell and
+// does not change auxlab2's directory.
+bool MainWindow::runBuiltinShellCommand(const QString& shellCmd, QString& output, bool& ok) {
+  ok = true;
+  static const QRegularExpression kPwd(R"(^pwd\s*$)");
+  static const QRegularExpression kCd(R"(^(?:cd|chdir)(?:\s+(.*))?$)");
+  static const QRegularExpression kShellSyntax(R"([;&|<>`$*?])");
+  if (kPwd.match(shellCmd).hasMatch()) {
+    output = QDir::toNativeSeparators(QDir::currentPath());
+    return true;
+  }
+  const QRegularExpressionMatch cd = kCd.match(shellCmd);
+  if (!cd.hasMatch() || kShellSyntax.match(cd.captured(1)).hasMatch()) {
+    return false;
+  }
+  ok = changeWorkingDirectory(cd.captured(1), output);
+  return true;
+}
+
+bool MainWindow::changeWorkingDirectory(const QString& arg, QString& output) {
+  if (engine_.isPaused()) {
+    output = QStringLiteral("Error: cd is not available while the debugger is paused.");
+    return false;
+  }
+
+  QString target = arg.trimmed();
+#ifdef Q_OS_WIN
+  if (target.startsWith(QStringLiteral("/d "), Qt::CaseInsensitive)) {
+    target = target.mid(3).trimmed();
+  }
+#endif
+  if (target.size() >= 2 &&
+      ((target.startsWith('"') && target.endsWith('"')) || (target.startsWith('\'') && target.endsWith('\'')))) {
+    target = target.mid(1, target.size() - 2);
+  }
+  if (target.isEmpty() || target == QStringLiteral("~")) {
+    target = QDir::homePath();
+  } else if (target.startsWith(QStringLiteral("~/"))) {
+    target = QDir::homePath() + target.mid(1);
+  } else if (target == QStringLiteral("-")) {
+    if (previousWorkingDir_.isEmpty()) {
+      output = QStringLiteral("Error: cd: no previous directory.");
+      return false;
+    }
+    target = previousWorkingDir_;
+  }
+
+  const QString oldDir = QDir::currentPath();
+  const QFileInfo info(QDir(oldDir).absoluteFilePath(target));
+  if (!info.exists()) {
+    output = QStringLiteral("Error: cd: no such directory: %1").arg(target);
+    return false;
+  }
+  if (!info.isDir()) {
+    output = QStringLiteral("Error: cd: not a directory: %1").arg(target);
+    return false;
+  }
+  if (!QDir::setCurrent(info.absoluteFilePath())) {
+    output = QStringLiteral("Error: cd: cannot change to %1").arg(target);
+    return false;
+  }
+  previousWorkingDir_ = oldDir;
+  const QString newDir = QDir::currentPath();
+  output = QDir::toNativeSeparators(newDir);
+
+  // Cached UDFs found through the old directory would otherwise keep shadowing the new search.
+  // Files open in the UDF editor stay as they are, along with their breakpoints.
+  std::vector<std::string> pinned;
+  QStringList openFiles = debugWindow_ ? debugWindow_->openFilePaths() : QStringList();
+  if (!currentUdfFilePath_.isEmpty()) {
+    openFiles.push_back(currentUdfFilePath_);
+  }
+  for (const QString& file : openFiles) {
+    pinned.push_back(QDir::toNativeSeparators(file).toStdString());
+  }
+  const auto forgotten = engine_.forgetUdfsAfterDirectoryChange(
+      QDir::toNativeSeparators(oldDir).toStdString(), QDir::toNativeSeparators(newDir).toStdString(), pinned);
+  if (!forgotten.empty()) {
+    QStringList names;
+    for (const std::string& name : forgotten) {
+      names.push_back(QString::fromStdString(name));
+    }
+    output += QStringLiteral("\n(UDFs to be searched again on next call: %1)").arg(names.join(QStringLiteral(", ")));
+  }
+  return true;
+}
+
+void MainWindow::startShellProcess(const QString& shellCmd) {
+  auto* proc = new QProcess(this);
+  shellProcess_ = proc;
+  shellInterrupted_ = false;
+  shellDecoder_ = std::make_unique<QStringDecoder>(QStringDecoder::System);
+  proc->setProcessChannelMode(QProcess::MergedChannels);
+#ifdef Q_OS_WIN
+  proc->setProgram(QStringLiteral("cmd.exe"));
+  proc->setNativeArguments(QStringLiteral("/c ") + shellCmd);
+#else
+  proc->setProgram(QStringLiteral("/bin/sh"));
+  proc->setArguments({QStringLiteral("-c"), shellCmd});
+  // Own process group, so Ctrl+C reaches every process in a pipeline, not just sh.
+  proc->setChildProcessModifier([] { ::setpgid(0, 0); });
+#endif
+
+  connect(proc, &QProcess::readyReadStandardOutput, this, [this, proc]() {
+    commandBox_->appendBusyOutput((*shellDecoder_)(proc->readAllStandardOutput()));
+  });
+  connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError error) {
+    if (error != QProcess::FailedToStart || shellProcess_ != proc) {
+      return;  // other errors are followed by finished()
+    }
+    commandBox_->appendBusyOutput(QStringLiteral("Error: could not start the shell: %1\n").arg(proc->errorString()));
+    shellProcess_ = nullptr;
+    proc->deleteLater();
+    finishCommandSegments();
+  });
+  connect(proc, &QProcess::finished, this, [this, proc](int exitCode, QProcess::ExitStatus status) {
+    if (shellProcess_ != proc) {
+      return;
+    }
+    commandBox_->appendBusyOutput((*shellDecoder_)(proc->readAllStandardOutput()));
+    const bool ok = !shellInterrupted_ && status == QProcess::NormalExit && exitCode == 0;
+    QString note;
+    if (shellInterrupted_) {
+      note = QStringLiteral("^C (interrupted)");
+    } else if (status != QProcess::NormalExit) {
+      note = QStringLiteral("(shell command terminated abnormally)");
+    } else if (exitCode != 0) {
+      note = QStringLiteral("(exit code %1)").arg(exitCode);
+    }
+    if (!note.isEmpty()) {
+      commandBox_->appendAsyncOutput(note);
+    }
+    shellProcess_ = nullptr;
+    proc->deleteLater();
+    if (ok) {
+      runNextCommandSegment();
+    } else {
+      finishCommandSegments();
+    }
+  });
+
+  proc->start();
+  proc->closeWriteChannel();  // no console stdin: interactive programs see end of input
+}
+
+void MainWindow::interruptShellProcess() {
+  if (!shellProcess_ || shellProcess_->state() == QProcess::NotRunning) {
+    return;
+  }
+  const bool alreadyInterrupted = shellInterrupted_;
+  shellInterrupted_ = true;
+#ifdef Q_OS_WIN
+  shellProcess_->kill();
+#else
+  const pid_t pgid = static_cast<pid_t>(shellProcess_->processId());
+  if (pgid <= 0) {
+    return;
+  }
+  // First Ctrl+C sends SIGINT like a terminal; a second one, or a command that ignores SIGINT
+  // for 2 s, gets SIGKILL.
+  ::kill(-pgid, alreadyInterrupted ? SIGKILL : SIGINT);
+  if (!alreadyInterrupted) {
+    QPointer<QProcess> guard(shellProcess_);
+    QTimer::singleShot(2000, this, [guard, pgid]() {
+      if (guard && guard->state() != QProcess::NotRunning) {
+        ::kill(-pgid, SIGKILL);
+      }
+    });
+  }
+#endif
 }
 
 bool MainWindow::isUndoCommand(const QString& cmd) const {
@@ -2627,6 +2982,9 @@ void MainWindow::runCommandInternal(const QString& cmd, bool addToHistory, bool 
     const QString trimmed = actual.trimmed();
     const bool suppressEcho = trimmed.endsWith(';');
     const bool isOk = result.status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK);
+    if (!isOk) {
+      lastEvalFailed_ = true;
+    }
     if (suppressEcho && isOk) {
       commandBox_->appendExecutionResult({});
     } else {

@@ -103,6 +103,13 @@ public:
   std::optional<std::string> getStringValue(const std::string& varName) const;
   bool loadUdfFile(const std::string& fullPath, std::string& err);
   bool reloadUdfByName(const std::string& udfName, std::string& err);
+  // After the working directory changes from oldDir to newDir, drop cached UDFs whose lookup
+  // depended on it (found in oldDir or via a relative path, or now shadowed by a same-named file
+  // in newDir) so their next call searches again. Files in pinnedFiles (open in the editor) are
+  // kept. Returns the names that were dropped.
+  std::vector<std::string> forgetUdfsAfterDirectoryChange(const std::string& oldDir,
+                                                          const std::string& newDir,
+                                                          const std::vector<std::string>& pinnedFiles);
   bool setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err);
   std::set<int> getBreakpoints(const std::string& udfName) const;
 

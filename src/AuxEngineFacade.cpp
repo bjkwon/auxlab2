@@ -1,5 +1,6 @@
 #include "AuxEngineFacade.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <atomic>
@@ -1234,6 +1235,59 @@ bool AuxEngineFacade::reloadUdfByName(const std::string& udfName, std::string& e
 
   err = "UDF file not found: " + fileName.string();
   return false;
+}
+
+std::vector<std::string> AuxEngineFacade::forgetUdfsAfterDirectoryChange(
+    const std::string& oldDir, const std::string& newDir, const std::vector<std::string>& pinnedFiles) {
+  std::vector<std::string> forgotten;
+  if (!activeCtx_) {
+    return forgotten;
+  }
+
+  // auxe records UDF paths lower-cased, so compare canonical lower-case strings (canonical so
+  // that symlinked spellings such as /tmp and /private/tmp on macOS still match).
+  auto normalized = [](const std::filesystem::path& p) {
+    std::error_code ec;
+    std::filesystem::path canonical = std::filesystem::weakly_canonical(p, ec);
+    if (ec) {
+      canonical = p.lexically_normal();
+    }
+    std::string s = canonical.string();
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\')) {
+      s.pop_back();
+    }
+    return s;
+  };
+
+  const std::filesystem::path oldBase(oldDir);
+  const std::string oldDirKey = normalized(oldBase);
+  std::set<std::string> pinned;
+  for (const std::string& file : pinnedFiles) {
+    pinned.insert(normalized(std::filesystem::path(file)));
+  }
+
+  for (const auto& [name, fullName] : aux_list_udfs(activeCtx_)) {
+    if (fullName.empty()) {
+      continue;
+    }
+    std::filesystem::path resolved(fullName);
+    const bool relative = !resolved.is_absolute();
+    if (relative) {
+      resolved = oldBase / resolved;
+    }
+    if (pinned.count(normalized(resolved)) != 0) {
+      continue;
+    }
+    std::error_code ec;
+    const bool shadowed = std::filesystem::exists(std::filesystem::path(newDir) / (name + ".aux"), ec) && !ec;
+    if (relative || normalized(resolved.parent_path()) == oldDirKey || shadowed) {
+      if (aux_forget_udf(activeCtx_, name) == 0) {
+        forgotten.push_back(name);
+      }
+    }
+  }
+  return forgotten;
 }
 
 bool AuxEngineFacade::setBreakpoint(const std::string& udfName, int line, bool enabled, std::string& err) {

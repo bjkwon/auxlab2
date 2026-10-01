@@ -20,8 +20,17 @@ public:
   void appendExecutionResult(const QString& output);
   void appendAsyncOutput(const QString& output);
 
+  // Busy mode covers a submission that finishes asynchronously (shell commands). Output is
+  // appended without a prompt, input is blocked, and Ctrl+C (physical Control on macOS)
+  // emits interruptRequested(). endBusy() restores the prompt.
+  void beginBusy();
+  void appendBusyOutput(const QString& output);
+  void endBusy();
+  bool isBusy() const { return busy_; }
+
 signals:
   void commandSubmitted(const QString& cmd);
+  void interruptRequested();
   void historyNavigateRequested(int delta);
   void reverseSearchRequested();
   void objectUndoRequested();
@@ -39,9 +48,12 @@ protected:
 private:
   void appendPrompt();
   void ensureEditableCursor();
+  bool documentEndsWithNewline() const;
+  bool isInterruptKey(QKeyEvent* event) const;
   QString quotedPathListFromMimeData(const QMimeData* mimeData) const;
 
   QString prompt_ = "AUX> ";
   QColor promptColor_ = QColor(90, 180, 255);
   int inputStartPos_ = 0;
+  bool busy_ = false;
 };
