@@ -24,6 +24,12 @@ enum class StereoDisplayMode {
   OverlayRightForeground,
 };
 
+enum class AxesRole {
+  Signal,
+  Spectrum,
+  Spectrogram,
+};
+
 struct GraphicsObjectCommon {
   std::uint64_t id = 0;
   GraphicsObjectType type = GraphicsObjectType::Figure;
@@ -62,6 +68,13 @@ struct GraphicsAxesHandle {
   bool ygrid = true;
   int logicalChannel = 0;
   bool showXTickLabels = true;
+  // Derived (Spectrum/Spectrogram) axes analyze the signal axes sourceAxesId,
+  // which displays logical channel sourceChannel.
+  AxesRole role = AxesRole::Signal;
+  std::uint64_t sourceAxesId = 0;
+  int sourceChannel = -1;
+
+  bool isDerived() const { return role != AxesRole::Signal; }
 };
 
 struct GraphicsLineHandle {
@@ -110,6 +123,18 @@ public:
   bool containsLine(std::uint64_t lineId) const;
   bool containsText(std::uint64_t textId) const;
 
+  // Spectrum view: halves each signal axes and adds a spectrum axes beside it.
+  void setSpectrumVisible(bool visible);
+  bool spectrumVisible() const { return spectrumVisible_; }
+  bool setSpectrumData(int channel, const QVector<double>& freqHz, const QVector<double>& db, double nyquistHz);
+  // Spectrogram view: splits each signal axes vertically and puts a
+  // time-aligned spectrogram axes in the lower half. Image data is rendered
+  // by SignalGraphWindow; the axes only carry layout and limits.
+  void setSpectrogramVisible(bool visible);
+  bool spectrogramVisible() const { return spectrogramVisible_; }
+  AxesRole axesRole(std::uint64_t axesId) const;
+  bool isSpectrumAxes(std::uint64_t axesId) const { return axesRole(axesId) == AxesRole::Spectrum; }
+
   const GraphicsFigureHandle& figure() const { return figure_; }
   GraphicsFigureHandle& figureMutable() { return figure_; }
   const std::vector<GraphicsAxesHandle>& axes() const { return axes_; }
@@ -137,6 +162,12 @@ private:
   GraphicsLineHandle& addDefaultLine(std::uint64_t axesId, int logicalChannel, const QColor& color);
   void syncLineData(const SignalData& data);
   void applyStereoLayout();
+  bool applySignalAxesLayout();
+  void applySpectrumLayout();
+  void applySpectrogramLayout();
+  void addDerivedAxes(AxesRole role);
+  void removeDerivedAxes(AxesRole role);
+  bool* derivedVisibleFlag(AxesRole role);
   std::uint64_t nextId();
 
   GraphicsFigureHandle figure_;
@@ -146,4 +177,6 @@ private:
   std::uint64_t currentAxesId_ = 0;
   StereoDisplayMode stereoDisplayMode_ = StereoDisplayMode::SplitAxes;
   int channelCount_ = 0;
+  bool spectrumVisible_ = false;
+  bool spectrogramVisible_ = false;
 };

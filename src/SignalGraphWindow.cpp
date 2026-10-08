@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <limits>
 #include <utility>
 
@@ -195,6 +196,64 @@ QString formatSecondsCompact(double sec) {
     return trimTrailingZeros(QString::number(clamped, 'f', 2));
   }
   return trimTrailingZeros(QString::number(clamped, 'f', 3));
+}
+
+QString formatFrequencyTick(double hz) {
+  if (std::fabs(hz) >= 1000.0) {
+    return trimTrailingZeros(QString::number(hz / 1000.0, 'f', 2)) + "k";
+  }
+  return QString::number(static_cast<int>(std::llround(hz)));
+}
+
+// In-place iterative radix-2 FFT; data.size() must be a power of two.
+void fftRadix2(std::vector<std::complex<double>>& data) {
+  const size_t n = data.size();
+  for (size_t i = 1, j = 0; i < n; ++i) {
+    size_t bit = n >> 1;
+    for (; j & bit; bit >>= 1) {
+      j ^= bit;
+    }
+    j ^= bit;
+    if (i < j) {
+      std::swap(data[i], data[j]);
+    }
+  }
+  for (size_t len = 2; len <= n; len <<= 1) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double angle = -2.0 * kPi / static_cast<double>(len);
+    const std::complex<double> wlen(std::cos(angle), std::sin(angle));
+    for (size_t i = 0; i < n; i += len) {
+      std::complex<double> w(1.0, 0.0);
+      for (size_t k = 0; k < len / 2; ++k) {
+        const std::complex<double> u = data[i + k];
+        const std::complex<double> v = data[i + k + len / 2] * w;
+        data[i + k] = u + v;
+        data[i + k + len / 2] = u - v;
+        w *= wlen;
+      }
+    }
+  }
+}
+
+// Viridis-like colormap, t in [0, 1].
+QRgb spectrogramColor(double t) {
+  static const std::array<QColor, 5> stops = {QColor(68, 1, 84), QColor(59, 82, 139), QColor(33, 145, 140),
+                                              QColor(94, 201, 98), QColor(253, 231, 37)};
+  static const std::array<QRgb, 256> lut = [] {
+    std::array<QRgb, 256> out{};
+    for (int i = 0; i < 256; ++i) {
+      const double pos = (i / 255.0) * (stops.size() - 1);
+      const int k = std::min(static_cast<int>(pos), static_cast<int>(stops.size()) - 2);
+      const double f = pos - k;
+      const QColor& a = stops[static_cast<size_t>(k)];
+      const QColor& b = stops[static_cast<size_t>(k + 1)];
+      out[static_cast<size_t>(i)] = qRgb(static_cast<int>(a.red() + f * (b.red() - a.red())),
+                                         static_cast<int>(a.green() + f * (b.green() - a.green())),
+                                         static_cast<int>(a.blue() + f * (b.blue() - a.blue())));
+    }
+    return out;
+  }();
+  return lut[static_cast<size_t>(std::clamp(static_cast<int>(std::lround(t * 255.0)), 0, 255))];
 }
 
 QString formatSecondsWithSuffix(double sec) {
@@ -602,6 +661,215 @@ void SignalGraphWindow::clearSelectedRange(std::optional<std::uint64_t> axesId) 
   update();
 }
 
+bool SignalGraphWindow::spectrumAvailable() const {
+  return data_->isAudio && data_->sampleRate > 0 && !data_->channels.empty() && static_cast<bool>(fftProvider_);
+}
+
+bool SignalGraphWindow::spectrumVisible() const {
+  return graphics_.spectrumVisible();
+}
+
+void SignalGraphWindow::setSpectrumVisible(bool visible) {
+  if (visible && !spectrumAvailable()) {
+    return;
+  }
+  graphics_.setSpectrumVisible(visible);
+  spectrumDataSerial_ = -1;
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::ensureSpectrumData() {
+  if (!graphics_.spectrumVisible() || !spectrumAvailable()) {
+    return;
+  }
+  // Keep the last spectrum while a selection drag is in progress; recompute
+  // once the drag settles.
+  if (selecting_ && spectrumDataSerial_ == dataSerial_) {
+    return;
+  }
+
+  Range range = clampRange({viewStart_, viewStart_ + std::max(1, viewLen_)});
+  const Range sel = normalizedSelection();
+  if (sel.end > sel.start) {
+    range = clampRange(sel);
+  }
+  const int len = std::max(1, range.end - range.start);
+  if (spectrumDataSerial_ == dataSerial_ && spectrumStart_ == range.start && spectrumLen_ == len) {
+    return;
+  }
+  spectrumDataSerial_ = dataSerial_;
+  spectrumStart_ = range.start;
+  spectrumLen_ = len;
+
+  // Normalize so the loudest bin across all channels sits at 0 dB; a shared
+  // reference keeps the left/right level difference visible.
+  constexpr double kSpectrumRangeDb = 80.0;
+  constexpr double kRawFloorDb = -240.0;
+  auto powerDb = fftProvider_(range.start, len, kRawFloorDb);
+  double peakDb = kRawFloorDb;
+  for (const auto& bins : powerDb) {
+    for (const double db : bins) {
+      peakDb = std::max(peakDb, db);
+    }
+  }
+  for (auto& bins : powerDb) {
+    for (double& db : bins) {
+      db = std::max(-kSpectrumRangeDb, db - peakDb);
+    }
+  }
+
+  const double nyquistHz = data_->sampleRate * 0.5;
+  constexpr int kMaxSpectrumPoints = 2048;
+  for (int ch = 0; ch < static_cast<int>(powerDb.size()); ++ch) {
+    const auto& bins = powerDb[static_cast<size_t>(ch)];
+    const int n = static_cast<int>(bins.size());
+    QVector<double> freqHz;
+    QVector<double> db;
+    if (n > 0) {
+      const double binHz = n > 1 ? nyquistHz / (n - 1) : 0.0;
+      const int groups = std::min(n, kMaxSpectrumPoints);
+      freqHz.reserve(groups);
+      db.reserve(groups);
+      for (int g = 0; g < groups; ++g) {
+        const int b0 = static_cast<int>(static_cast<long long>(g) * n / groups);
+        const int b1 = std::max(b0 + 1, static_cast<int>(static_cast<long long>(g + 1) * n / groups));
+        // Keep each group's peak so narrow tones survive the decimation.
+        int peak = b0;
+        for (int b = b0 + 1; b < b1; ++b) {
+          if (bins[static_cast<size_t>(b)] > bins[static_cast<size_t>(peak)]) {
+            peak = b;
+          }
+        }
+        freqHz.push_back(peak * binHz);
+        db.push_back(bins[static_cast<size_t>(peak)]);
+      }
+    }
+    graphics_.setSpectrumData(ch, freqHz, db, nyquistHz);
+  }
+  invalidateStaticLayer();
+}
+
+bool SignalGraphWindow::spectrogramAvailable() const {
+  return data_->isAudio && data_->sampleRate > 0 && !data_->channels.empty();
+}
+
+bool SignalGraphWindow::spectrogramVisible() const {
+  return graphics_.spectrogramVisible();
+}
+
+void SignalGraphWindow::setSpectrogramVisible(bool visible) {
+  if (visible && !spectrogramAvailable()) {
+    return;
+  }
+  graphics_.setSpectrogramVisible(visible);
+  spectrogramImages_.clear();
+  spectrogramDataSerial_ = -1;
+  syncVisibleXRangeToAxes();
+  invalidateStaticLayer();
+  update();
+}
+
+void SignalGraphWindow::ensureSpectrogramImages(int columns) {
+  columns = std::max(1, columns);
+  if (spectrogramDataSerial_ == dataSerial_ && spectrogramViewStart_ == viewStart_ &&
+      spectrogramViewLen_ == viewLen_ && spectrogramColumns_ == columns) {
+    return;
+  }
+  spectrogramDataSerial_ = dataSerial_;
+  spectrogramViewStart_ = viewStart_;
+  spectrogramViewLen_ = viewLen_;
+  spectrogramColumns_ = columns;
+  spectrogramImages_.clear();
+  if (!spectrogramAvailable() || viewLen_ <= 0) {
+    return;
+  }
+
+  // ~30 ms Hann window; one frame per pixel column, centered on the column's
+  // time, so cost scales with the axes width rather than the view length.
+  const int fs = data_->sampleRate;
+  int nfft = 256;
+  while (nfft * 2 <= fs * 0.032 && nfft < 4096) {
+    nfft *= 2;
+  }
+  const int bins = nfft / 2 + 1;
+  std::vector<double> window(static_cast<size_t>(nfft));
+  for (int i = 0; i < nfft; ++i) {
+    window[static_cast<size_t>(i)] = 0.5 - 0.5 * std::cos(2.0 * 3.14159265358979323846 * i / (nfft - 1));
+  }
+
+  const int offset = timelineOffsetSamples(*data_);
+  const int nChannels = static_cast<int>(data_->channels.size());
+  std::vector<std::vector<float>> powerDb(static_cast<size_t>(nChannels));
+  double peakDb = -300.0;
+  std::vector<std::complex<double>> frame(static_cast<size_t>(nfft));
+  for (int ch = 0; ch < nChannels; ++ch) {
+    const auto& samples = data_->channels[static_cast<size_t>(ch)].samples;
+    const int dataLen = static_cast<int>(samples.size());
+    auto& out = powerDb[static_cast<size_t>(ch)];
+    out.resize(static_cast<size_t>(columns) * bins);
+    for (int c = 0; c < columns; ++c) {
+      const double center = viewStart_ + (c + 0.5) * static_cast<double>(viewLen_) / columns;
+      const int start = static_cast<int>(std::floor(center)) - nfft / 2 - offset;
+      for (int i = 0; i < nfft; ++i) {
+        const int di = start + i;
+        const double v = (di >= 0 && di < dataLen) ? samples[static_cast<size_t>(di)] : 0.0;
+        frame[static_cast<size_t>(i)] = std::complex<double>(std::isfinite(v) ? v * window[static_cast<size_t>(i)] : 0.0, 0.0);
+      }
+      fftRadix2(frame);
+      for (int k = 0; k < bins; ++k) {
+        const double db = 10.0 * std::log10(std::max(1e-30, std::norm(frame[static_cast<size_t>(k)])));
+        out[static_cast<size_t>(c) * bins + k] = static_cast<float>(db);
+        peakDb = std::max(peakDb, db);
+      }
+    }
+  }
+
+  // Same normalization as the spectrum: 0 dB = loudest bin across channels,
+  // 80 dB of range below it.
+  constexpr double kRangeDb = 80.0;
+  for (int ch = 0; ch < nChannels; ++ch) {
+    QImage image(columns, bins, QImage::Format_RGB32);
+    const auto& db = powerDb[static_cast<size_t>(ch)];
+    for (int k = 0; k < bins; ++k) {
+      auto* row = reinterpret_cast<QRgb*>(image.scanLine(bins - 1 - k));
+      for (int c = 0; c < columns; ++c) {
+        const double t = (db[static_cast<size_t>(c) * bins + k] - peakDb + kRangeDb) / kRangeDb;
+        row[c] = spectrogramColor(t);
+      }
+    }
+    spectrogramImages_[ch] = std::move(image);
+  }
+}
+
+void SignalGraphWindow::drawSpectrogram(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes) {
+  ensureSpectrogramImages(area.width());
+  // In stereo overlay only the left spectrogram axes is visible; images cannot
+  // be overlaid, so it shows whichever channel F2 brought to the foreground.
+  int channel = axes.sourceChannel;
+  if (channel == 0 && graphics_.stereoDisplayMode() == StereoDisplayMode::OverlayRightForeground) {
+    channel = 1;
+  }
+  const auto it = spectrogramImages_.find(channel);
+  if (it == spectrogramImages_.end() || it->second.isNull()) {
+    return;
+  }
+  const QImage& image = it->second;
+  // Rows span 0..Nyquist; crop to the axes' frequency limits.
+  const double nyquistHz = data_->sampleRate * 0.5;
+  const double lo = std::clamp(axes.ylim[0], 0.0, nyquistHz);
+  const double hi = std::clamp(axes.ylim[1], 0.0, nyquistHz);
+  const double ySpan = axes.ylim[1] - axes.ylim[0];
+  if (hi <= lo || nyquistHz <= 0.0 || ySpan <= 0.0) {
+    return;
+  }
+  const auto freqToY = [&](double hz) { return area.bottom() - (hz - axes.ylim[0]) / ySpan * area.height(); };
+  const double rows = image.height();
+  const QRectF source(0.0, (1.0 - hi / nyquistHz) * rows, image.width(), (hi - lo) / nyquistHz * rows);
+  const QRectF target(area.left(), freqToY(hi), area.width(), freqToY(lo) - freqToY(hi));
+  p.drawImage(target, image, source);
+}
+
 std::array<double, 4> SignalGraphWindow::currentFigurePos() const {
   return qtRectToMatlabFigurePos(geometry());
 }
@@ -629,14 +897,19 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
   p.fillRect(rect(), graphics_.figure().common.color);
 
   const QRect plot = plotRect();
+  ensureSpectrumData();
   ensureStaticLayer(plot);
   if (!staticLayer_.isNull()) {
     p.drawImage(QPoint(0, 0), staticLayer_);
   }
 
   for (const auto& axes : graphics_.axes()) {
-    const Range sel = selectionForAxes(axes.common.id);
-    if (!axes.common.visible || sel.end <= sel.start) {
+    if (!axes.common.visible || axes.role == AxesRole::Spectrum) {
+      continue;
+    }
+    // A spectrogram shares its waveform's time axis, so it mirrors that selection.
+    const Range sel = selectionForAxes(axes.role == AxesRole::Spectrogram ? axes.sourceAxesId : axes.common.id);
+    if (sel.end <= sel.start) {
       continue;
     }
     const QRect selectionRect = axesRectForPlot(axes, plot);
@@ -655,7 +928,7 @@ void SignalGraphWindow::paintEvent(QPaintEvent*) {
     sample = std::clamp(sample, viewStart_, std::max(viewStart_, viewStart_ + viewLen_ - 1));
     p.setPen(QPen(QColor(255, 230, 120), 1));
     for (const auto& axes : graphics_.axes()) {
-      if (!axes.common.visible) {
+      if (!axes.common.visible || axes.role == AxesRole::Spectrum) {
         continue;
       }
       const QRect axesRect = axesRectForPlot(axes, plot);
@@ -933,8 +1206,21 @@ void SignalGraphWindow::mousePressEvent(QMouseEvent* event) {
   }
 
   updateHoverFromPoint(event->pos());
+  std::uint64_t hitAxesId = axesIdAtPoint(event->pos());
+  if (graphics_.axesRole(hitAxesId) == AxesRole::Spectrogram) {
+    // Selecting on a spectrogram selects on the waveform above it.
+    if (const auto* axes = graphics_.axesByIdMutable(hitAxesId)) {
+      hitAxesId = axes->sourceAxesId;
+    }
+  }
+  if (hitAxesId != 0 && graphics_.isSpectrumAxes(hitAxesId)) {
+    // Spectrum axes have a frequency x-axis; time selection does not apply.
+    update();
+    event->accept();
+    return;
+  }
   selecting_ = true;
-  selectingAxesId_ = axesIdAtPoint(event->pos());
+  selectingAxesId_ = hitAxesId;
   if (selectingAxesId_ == 0) {
     if (const auto* axes = graphics_.leftChannelAxes()) {
       selectingAxesId_ = axes->common.id;
@@ -1003,6 +1289,11 @@ void SignalGraphWindow::mouseReleaseEvent(QMouseEvent* event) {
       return;
     }
     updateHoverFromPoint(event->pos());
+    if (!selecting_) {
+      // Press did not start a selection (spectrum axes or Shift-extend).
+      update();
+      return;
+    }
     selecting_ = false;
     selEnd_ = xToSample(event->pos());
     if (selectingAxesId_ != 0) {
@@ -1717,6 +2008,9 @@ void SignalGraphWindow::syncFigurePosFromWidget() {
 void SignalGraphWindow::updateYRange() {
   const auto applyAutoYLimToAllAxes = [this](const std::array<double, 2>& ylim) {
     for (const auto& axesConst : graphics_.axes()) {
+      if (axesConst.isDerived()) {
+        continue;
+      }
       if (auto* axes = graphics_.axesByIdMutable(axesConst.common.id); axes && axes->autoYLim) {
         axes->ylim = ylim;
       }
@@ -1763,7 +2057,7 @@ void SignalGraphWindow::updateYRange() {
 
   for (const auto& axesConst : graphics_.axes()) {
     auto* axes = graphics_.axesByIdMutable(axesConst.common.id);
-    if (!axes || !axes->autoYLim) {
+    if (!axes || !axes->autoYLim || axes->isDerived()) {
       continue;
     }
 
@@ -1808,7 +2102,21 @@ void SignalGraphWindow::syncVisibleXRangeToAxes() {
 
   for (const auto& axesConst : graphics_.axes()) {
     auto* axes = graphics_.axesByIdMutable(axesConst.common.id);
-    if (!axes) {
+    if (!axes || axes->role == AxesRole::Spectrum) {
+      continue;
+    }
+    if (axes->role == AxesRole::Spectrogram) {
+      // No lines: time follows the view, frequency spans 0..Nyquist.
+      if (data_->isAudio && data_->sampleRate > 0) {
+        const double fs = static_cast<double>(data_->sampleRate);
+        if (axes->autoXLim) {
+          axes->xlim = {data_->startTimeSec + viewStart_ / fs,
+                        data_->startTimeSec + (viewStart_ + std::max(1, viewLen_) - 1) / fs};
+        }
+        if (axes->autoYLim) {
+          axes->ylim = {0.0, fs * 0.5};
+        }
+      }
       continue;
     }
     if (!axes->autoXLim) {
@@ -1888,7 +2196,9 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       const QRect axesRect = axesRectForPlot(axes, plot);
       const int xTickCount = 7;
       const int yTickCount = 5;
-      const bool xIsTime = data_->isAudio && data_->sampleRate > 0;
+      const bool isSpectrum = axes.role == AxesRole::Spectrum;
+      const bool isSpectrogram = axes.role == AxesRole::Spectrogram;
+      const bool xIsTime = !isSpectrum && data_->isAudio && data_->sampleRate > 0;
       const double xStartVal = axes.xlim[0];
       const double xEndVal = axes.xlim[1];
       const double xSpan = std::max(1e-12, xEndVal - xStartVal);
@@ -1921,6 +2231,12 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
           if (farInValue && pxDist >= kMinEndpointLabelSpacingPx) {
             xTicks.push_back(xEndVal);
           }
+        }
+      } else if (isSpectrum) {
+        const double step = niceNumber(xSpan / 5.0, true);
+        const double eps = step * 1e-6;
+        for (double f = std::ceil((xStartVal - eps) / step) * step; f <= xEndVal + eps; f += step) {
+          xTicks.push_back(f);
         }
       } else {
         for (int i = 0; i < xTickCount; ++i) {
@@ -1959,6 +2275,9 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
       }
 
       p.fillRect(axesRect, axes.common.color);
+      if (isSpectrogram) {
+        drawSpectrogram(p, axesRect, axes);
+      }
       if (axes.box) {
         p.setPen(QPen(QColor(40, 40, 40), std::max(1, axes.lineWidth)));
         p.drawRect(axesRect);
@@ -1975,6 +2294,8 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
           QString label;
           if (xIsTime) {
             label = formatSecondsCompact(tick);
+          } else if (isSpectrum) {
+            label = formatFrequencyTick(tick);
           } else {
             label = QString::number(static_cast<int>(std::llround(tick)));
           }
@@ -1986,7 +2307,11 @@ void SignalGraphWindow::ensureStaticLayer(const QRect& plot) {
         const int y = axesRect.bottom() - (i * axesRect.height()) / (yTickCount - 1);
         const double v = yStartVal + ((yEndVal - yStartVal) * i) / (yTickCount - 1);
         p.drawLine(axesRect.left() - 4, y, axesRect.left(), y);
-        const QString label = formatYTickLabel(v, data_->isAudio);
+        if (isSpectrogram && i == yTickCount - 1) {
+          continue;  // Top edge is shared with the waveform's bottom label.
+        }
+        const QString label = isSpectrogram ? formatFrequencyTick(v)
+                                            : formatYTickLabel(v, data_->isAudio && !isSpectrum);
         const QRect labelRect(plot.left(), y - 8, std::max(0, axesRect.left() - plot.left() - 8), 16);
         p.drawText(labelRect, Qt::AlignRight | Qt::AlignVCenter, label);
       }
@@ -2034,6 +2359,7 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverInFft_ = false;
   hoverFftValue_ = 0.0;
   hoverFftFreqHz_ = 0.0;
+  hoverSpectrogramHz_ = -1.0;
   hoverXCoord_ = 0.0;
 
   if (showFftOverlay_ && data_->isAudio && data_->sampleRate > 0) {
@@ -2085,6 +2411,19 @@ void SignalGraphWindow::updateHoverFromPoint(const QPoint& pt) {
   hoverActive_ = true;
   const double x01 = std::clamp((pt.x() - axesRect.left()) / static_cast<double>(std::max(1, axesRect.width())), 0.0, 1.0);
   hoverXCoord_ = axes->xlim[0] + x01 * (axes->xlim[1] - axes->xlim[0]);
+  const double y01 = std::clamp((axesRect.bottom() - pt.y()) / static_cast<double>(std::max(1, axesRect.height())), 0.0, 1.0);
+  if (axes->role == AxesRole::Spectrogram) {
+    // Time comes from the shared x-axis below; add the frequency under the cursor.
+    hoverSpectrogramHz_ = axes->ylim[0] + y01 * (axes->ylim[1] - axes->ylim[0]);
+  }
+  if (axes->role == AxesRole::Spectrum) {
+    // Reuse the FFT-overlay readout: "(dB, Hz)".
+    hoverInFft_ = true;
+    hoverFftFreqHz_ = hoverXCoord_;
+    hoverFftValue_ = axes->ylim[0] + y01 * (axes->ylim[1] - axes->ylim[0]);
+    hoverSample_ = -1;
+    return;
+  }
   if (data_->isAudio && data_->sampleRate > 0) {
     const double samplePos = (hoverXCoord_ - data_->startTimeSec) * static_cast<double>(data_->sampleRate);
     hoverSample_ = std::clamp(static_cast<int>(std::llround(samplePos)), 0, std::max(0, totalTimelineSamples(*data_) - 1));
@@ -2212,7 +2551,7 @@ void SignalGraphWindow::ensureFftData() {
   if (!fftProvider_) {
     return;
   }
-  fftDb_ = fftProvider_(viewStart_, viewLen_);
+  fftDb_ = fftProvider_(viewStart_, viewLen_, std::nullopt);
 }
 
 std::vector<SignalGraphWindow::FftPaneLayout> SignalGraphWindow::buildFftPaneLayouts(const QRect& plot, int nChannels) const {
@@ -2350,7 +2689,10 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
       (hoverActive_ && hoverInFft_)
           ? QString("(%1, %2 Hz)").arg(hoverFftValue_, 0, 'f', 2).arg(hoverFftFreqHz_, 0, 'f', 1)
           : ((hoverActive_ && hoverSample_ >= 0)
-                 ? (data_->isAudio ? formatStatusSeconds(hoverXCoord_, audioViewSpanSec)
+                 ? (data_->isAudio ? formatStatusSeconds(hoverXCoord_, audioViewSpanSec) +
+                                         (hoverSpectrogramHz_ >= 0.0
+                                              ? QString(", %1 Hz").arg(hoverSpectrogramHz_, 0, 'f', 0)
+                                              : QString())
                                     : QString("(%1,%2)")
                                           .arg(QString::number(hoverXCoord_, 'g', 4))
                                           .arg(std::isfinite(hoverValue_) ? QString::number(hoverValue_, 'f', 3) : QString("null")))
@@ -2368,7 +2710,8 @@ void SignalGraphWindow::drawStatusBar(QPainter& p) const {
   const QStringList cells = {mouseText, viewStartText, viewEndText, selStartText, selEndText, rmsText};
   const QFontMetrics fm(p.font());
   const int pad = 20;
-  const int hoverPrefWidth = hoverInFft_ || !data_->isAudio || audioViewSpanSec < 60.0 ? 120 : 72;
+  const int hoverPrefWidth =
+      hoverInFft_ || hoverSpectrogramHz_ >= 0.0 || !data_->isAudio || audioViewSpanSec < 60.0 ? 120 : 72;
   const int minWidths[] = {44, 58, 58, 58, 58, 118};
   const int prefWidths[] = {
       hoverPrefWidth,

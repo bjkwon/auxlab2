@@ -186,6 +186,7 @@ private:
   void detachGraphWindow(SignalGraphWindow* window);
   void detachCurrentGraphTab();
   void updateFigureTabControls();
+  void showFigureTabMenu(int index);
   SignalGraphWindow* findSignalGraphWindow(const QString& varName, auxContext* scope) const;
   void focusWindow(QWidget* window) const;
   void reconcileScopedWindows();
@@ -246,6 +247,9 @@ private:
   QListWidget* historyBox_ = nullptr;
   QTabWidget* figureTabs_ = nullptr;
   QToolButton* detachFigureButton_ = nullptr;
+  int figureTabPressIndex_ = -1;
+  bool figureTabPressWasCurrent_ = false;
+  QPoint figureTabPressPos_;
   UdfDebugWindow* debugWindow_ = nullptr;
   QAction* showDebugWindowAction_ = nullptr;
   QAction* focusMainWindowAction_ = nullptr;

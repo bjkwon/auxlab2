@@ -38,6 +38,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QIODevice>
@@ -52,6 +53,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QSplitter>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTextStream>
 #include <QTreeWidget>
@@ -1492,6 +1494,8 @@ void MainWindow::buildUi() {
   detachFigureButton_->setToolTip(QStringLiteral("Move the current figure to an independent window"));
   detachFigureButton_->setEnabled(false);
   figureTabs_->setCornerWidget(detachFigureButton_, Qt::TopRightCorner);
+  // Clicking the already-selected tab opens the figure menu (see eventFilter).
+  figureTabs_->tabBar()->installEventFilter(this);
 
   commandAndFigureSplitter->addWidget(commandBox_);
   commandAndFigureSplitter->addWidget(figureTabs_);
@@ -1877,6 +1881,31 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       showDebugWindowAction_->setChecked(false);
     } else if (event->type() == QEvent::Show && showDebugWindowAction_) {
       showDebugWindowAction_->setChecked(true);
+    }
+  }
+
+  if (figureTabs_ && watched == figureTabs_->tabBar()) {
+    QTabBar* bar = figureTabs_->tabBar();
+    if (event->type() == QEvent::MouseButtonPress) {
+      // Record before QTabBar switches tabs, so a click that merely selects a
+      // tab does not also open the menu.
+      const auto* me = static_cast<QMouseEvent*>(event);
+      figureTabPressPos_ = me->position().toPoint();
+      figureTabPressIndex_ = me->button() == Qt::LeftButton ? bar->tabAt(figureTabPressPos_) : -1;
+      figureTabPressWasCurrent_ = figureTabPressIndex_ >= 0 && figureTabPressIndex_ == figureTabs_->currentIndex();
+    } else if (event->type() == QEvent::MouseButtonRelease) {
+      const auto* me = static_cast<QMouseEvent*>(event);
+      const QPoint releasePos = me->position().toPoint();
+      const int index = figureTabPressIndex_;
+      const bool isClick = me->button() == Qt::LeftButton && index >= 0 && figureTabPressWasCurrent_ &&
+                           bar->tabAt(releasePos) == index &&
+                           (releasePos - figureTabPressPos_).manhattanLength() < QApplication::startDragDistance();
+      figureTabPressIndex_ = -1;
+      figureTabPressWasCurrent_ = false;
+      if (isClick) {
+        // Defer so QTabBar finishes its own release handling first.
+        QTimer::singleShot(0, this, [this, index]() { showFigureTabMenu(index); });
+      }
     }
   }
 
@@ -5022,7 +5051,9 @@ void MainWindow::openSignalGraphForPath(const QString& path) {
 
   auto* w = new SignalGraphWindow(
       path, graphData, options, nullptr,
-      [this, path](int viewStart, int viewLen) { return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen); });
+      [this, path](int viewStart, int viewLen, std::optional<double> unclampedFloorDb) {
+        return engine_.getSignalFftPowerDb(path.toStdString(), viewStart, viewLen, unclampedFloorDb);
+      });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(path, w, WindowKind::Graph);
   focusWindow(w);
@@ -5062,9 +5093,9 @@ SignalGraphWindow* MainWindow::createSignalFigureWindow(const QString& title,
       data,
       options,
       nullptr,
-      [this, sourcePath, variableBacked, trackName](int viewStart, int viewLen) {
+      [this, sourcePath, variableBacked, trackName](int viewStart, int viewLen, std::optional<double> unclampedFloorDb) {
         const QString fftSource = variableBacked && !sourcePath.isEmpty() ? sourcePath : trackName;
-        return engine_.getSignalFftPowerDb(fftSource.toStdString(), viewStart, viewLen);
+        return engine_.getSignalFftPowerDb(fftSource.toStdString(), viewStart, viewLen, unclampedFloorDb);
       });
   w->setAttribute(Qt::WA_DeleteOnClose, true);
   trackWindow(trackName, w, WindowKind::Graph, variableBacked);
@@ -6208,6 +6239,10 @@ void MainWindow::dockGraphWindow(SignalGraphWindow* window) {
     return;
   }
 
+  if (window->isWindow() && window->isVisible()) {
+    // Docking a detached figure: remember where it was for the next detach.
+    window->setLastDetachedGeometry(window->geometry());
+  }
   window->hide();
   window->setDockButtonVisible(false);
   window->setWindowFlags(Qt::Widget);
@@ -6239,7 +6274,15 @@ void MainWindow::detachGraphWindow(SignalGraphWindow* window) {
   QPoint detachedTopLeft = tabAreaGlobal.center() - QPoint(detachedSize.width() / 2, detachedSize.height() / 2);
   detachedTopLeft.setX(std::clamp(detachedTopLeft.x(), available.left(), available.right() - detachedSize.width() + 1));
   detachedTopLeft.setY(std::clamp(detachedTopLeft.y(), available.top(), available.bottom() - detachedSize.height() + 1));
-  const QRect detachedGeometry(detachedTopLeft, detachedSize);
+  QRect detachedGeometry(detachedTopLeft, detachedSize);
+  if (const auto saved = window->lastDetachedGeometry(); saved && saved->isValid()) {
+    // Reuse the last detached position unless that screen has gone away.
+    if (QScreen* savedScreen = QGuiApplication::screenAt(saved->center())) {
+      if (savedScreen->availableGeometry().intersects(*saved)) {
+        detachedGeometry = *saved;
+      }
+    }
+  }
 
   const int index = embeddedGraphTabIndex(window);
   if (index >= 0) {
@@ -6265,6 +6308,47 @@ void MainWindow::detachCurrentGraphTab() {
     return;
   }
   detachGraphWindow(graph);
+}
+
+void MainWindow::showFigureTabMenu(int index) {
+  if (!figureTabs_ || index < 0 || index >= figureTabs_->count()) {
+    return;
+  }
+  QPointer<SignalGraphWindow> graph = qobject_cast<SignalGraphWindow*>(figureTabs_->widget(index));
+  if (!graph) {
+    return;
+  }
+
+  QMenu menu(this);
+  // Save to .wav is a placeholder until implemented.
+  QAction* saveWavAction = menu.addAction(QStringLiteral("Save to .wav"));
+  saveWavAction->setEnabled(false);
+  QAction* spectrogramAction = menu.addAction(QStringLiteral("Spectrogram"));
+  spectrogramAction->setCheckable(true);
+  spectrogramAction->setChecked(graph->spectrogramVisible());
+  spectrogramAction->setEnabled(graph->spectrogramAvailable());
+  QAction* spectrumAction = menu.addAction(QStringLiteral("Spectrum"));
+  spectrumAction->setCheckable(true);
+  spectrumAction->setChecked(graph->spectrumVisible());
+  spectrumAction->setEnabled(graph->spectrumAvailable());
+  menu.addSeparator();
+  QAction* detachAction = menu.addAction(QStringLiteral("Detach"));
+  QAction* closeAction = menu.addAction(QStringLiteral("Close"));
+
+  QTabBar* bar = figureTabs_->tabBar();
+  QAction* chosen = menu.exec(bar->mapToGlobal(bar->tabRect(index).bottomLeft()));
+  if (!chosen || !graph) {
+    return;
+  }
+  if (chosen == spectrumAction) {
+    graph->setSpectrumVisible(!graph->spectrumVisible());
+  } else if (chosen == spectrogramAction) {
+    graph->setSpectrogramVisible(!graph->spectrogramVisible());
+  } else if (chosen == detachAction) {
+    detachGraphWindow(graph);
+  } else if (chosen == closeAction) {
+    graph->close();
+  }
 }
 
 void MainWindow::updateFigureTabControls() {

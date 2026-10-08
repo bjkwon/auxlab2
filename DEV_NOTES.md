@@ -1,3 +1,5 @@
+2026-10-08 0.9.9.c 2ac361c317f4 From Figure window tab pop-up menu, spectrum, spectrogram; remembers the floating figure window position when docked and the next detach sends the fig window to the last known position
+================================
 2026-10-01 0.9.9.b auxe 2.6.1 console: run '#' lines as OS shell commands;
 ================================
 2026-09-13 auxe 2.5.2 bug fix wave() UpdateBuffer buffer overflow crashing

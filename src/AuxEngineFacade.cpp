@@ -988,7 +988,10 @@ std::optional<double> AuxEngineFacade::getScalarValue(const std::string& varName
   return value;
 }
 
-std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const {
+std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std::string& varName,
+                                                                      int viewStart,
+                                                                      int viewLen,
+                                                                      std::optional<double> unclampedFloorDb) const {
   std::vector<std::vector<double>> out;
   if (!activeCtx_) {
     return out;
@@ -1020,7 +1023,10 @@ std::vector<std::vector<double>> AuxEngineFacade::getSignalFftPowerDb(const std:
   out.resize(static_cast<size_t>(channels));
   for (int ch = 0; ch < channels; ++ch) {
     std::vector<double> db;
-    if (aux_fft_power_db(obj, ch, start, len, offsetSamples, db)) {
+    const bool ok = unclampedFloorDb.has_value()
+                        ? aux_fft_power_db(obj, ch, start, len, offsetSamples, db, *unclampedFloorDb)
+                        : aux_fft_power_db(obj, ch, start, len, offsetSamples, db);
+    if (ok) {
       out[static_cast<size_t>(ch)] = std::move(db);
     }
   }

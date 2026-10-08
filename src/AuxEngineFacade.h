@@ -92,7 +92,8 @@ public:
   bool hasSignalData(const std::string& varName) const;
   std::optional<QVector<double>> getNumericVector(const std::string& varName) const;
   std::optional<double> getScalarValue(const std::string& varName) const;
-  std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen) const;
+  std::vector<std::vector<double>> getSignalFftPowerDb(const std::string& varName, int viewStart, int viewLen,
+                                                       std::optional<double> unclampedFloorDb = std::nullopt) const;
   std::optional<BinaryData> getBinaryData(const std::string& varName) const;
   std::optional<uint16_t> getValueType(const std::string& varName) const;
   bool isAudioVar(const std::string& varName) const;

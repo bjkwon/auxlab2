@@ -27,7 +27,8 @@ public:
     QString sourcePath;
   };
 
-  using FftProvider = std::function<std::vector<std::vector<double>>(int, int)>;
+  // (viewStart, viewLen, unclampedFloorDb): nullopt yields dB clamped to -80..0.
+  using FftProvider = std::function<std::vector<std::vector<double>>(int, int, std::optional<double>)>;
   struct FftPaneLayout {
     int channel = 0;
     QRect box;
@@ -71,6 +72,9 @@ public:
   std::array<double, 4> currentFigurePos() const;
   void applyFigurePos(const std::array<double, 4>& pos);
   void setDockButtonVisible(bool visible);
+  // Geometry the figure had as a detached window, restored on the next detach.
+  std::optional<QRect> lastDetachedGeometry() const { return lastDetachedGeometry_; }
+  void setLastDetachedGeometry(const QRect& geometry) { lastDetachedGeometry_ = geometry; }
   void refreshGraphics();
   void setAxesXLim(std::uint64_t axesId, const std::array<double, 2>& xlim);
   void setAxesYLim(std::uint64_t axesId, const std::array<double, 2>& ylim);
@@ -78,6 +82,12 @@ public:
   std::optional<SelectedRange> selectedRangeCapture(std::uint64_t axesId) const;
   bool setSelectedRange(std::uint64_t axesId, double xStart, double xEnd);
   void clearSelectedRange(std::optional<std::uint64_t> axesId = std::nullopt);
+  bool spectrumAvailable() const;
+  bool spectrumVisible() const;
+  void setSpectrumVisible(bool visible);
+  bool spectrogramAvailable() const;
+  bool spectrogramVisible() const;
+  void setSpectrogramVisible(bool visible);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -158,6 +168,9 @@ private:
   std::vector<FftPaneLayout> buildFftPaneLayouts(const QRect& plot, int nChannels) const;
   void updateDockButtonGeometry();
   QPoint clampFftPaneOffset(const QRect& plot, const QPoint& desired, int channelIndex) const;
+  void ensureSpectrumData();
+  void ensureSpectrogramImages(int columns);
+  void drawSpectrogram(QPainter& p, const QRect& area, const GraphicsAxesHandle& axes);
   void syncFigurePosFromWidget();
 
   QString varName_;
@@ -200,6 +213,19 @@ private:
   QPoint fftMoveStartOffset_;
   QTimer fftMoveHoldTimer_;
 
+  int spectrumStart_ = -1;
+  int spectrumLen_ = -1;
+  int spectrumDataSerial_ = -1;
+
+  // Per-channel spectrogram images (width = columns, row 0 = Nyquist) for the
+  // current view; all channels share one dB reference.
+  std::map<int, QImage> spectrogramImages_;
+  int spectrogramDataSerial_ = -1;
+  int spectrogramViewStart_ = -1;
+  int spectrogramViewLen_ = -1;
+  int spectrogramColumns_ = -1;
+  double hoverSpectrogramHz_ = -1.0;
+
   QAudioSink* audioSink_ = nullptr;
   QBuffer* audioBuffer_ = nullptr;
   QByteArray pcmData_;
@@ -224,4 +250,5 @@ private:
   mutable Range cachedRmsRange_{-1, -1};
   mutable int cachedRmsDataSerial_ = -1;
   QPointer<QWidget> dockButton_;
+  std::optional<QRect> lastDetachedGeometry_;
 };

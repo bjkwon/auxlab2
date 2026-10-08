@@ -137,6 +137,39 @@ const GraphicsLineHandle* GraphicsFigureModel::lineById(std::uint64_t lineId) co
 
 std::vector<const GraphicsLineHandle*> GraphicsFigureModel::linesForAxes(std::uint64_t axesId) const {
   std::vector<const GraphicsLineHandle*> out;
+  const auto axesIt = std::find_if(axes_.begin(), axes_.end(), [axesId](const GraphicsAxesHandle& axes) {
+    return axes.common.id == axesId;
+  });
+  if (axesIt != axes_.end() && axesIt->role == AxesRole::Spectrum) {
+    // Spectrum axes mirror the stereo overlay: the left-channel spectrum also
+    // carries the (hidden) right-channel spectrum line.
+    std::uint64_t peerAxesId = 0;
+    if (stereoOverlay() && axesIt->sourceChannel == 0) {
+      for (const auto& axes : axes_) {
+        if (axes.role == AxesRole::Spectrum && axes.sourceChannel == 1) {
+          peerAxesId = axes.common.id;
+          break;
+        }
+      }
+    }
+    const GraphicsLineHandle* peer = nullptr;
+    for (const auto& line : lines_) {
+      if (line.common.parentId == axesId) {
+        out.push_back(&line);
+      } else if (peerAxesId != 0 && line.common.parentId == peerAxesId && !peer) {
+        peer = &line;
+      }
+    }
+    if (peer) {
+      if (stereoDisplayMode_ == StereoDisplayMode::OverlayLeftForeground) {
+        out.insert(out.begin(), peer);
+      } else {
+        out.push_back(peer);
+      }
+    }
+    return out;
+  }
+
   const bool includeOverlayStereoPeer = stereoOverlay() &&
                                         std::any_of(axes_.begin(), axes_.end(), [axesId](const GraphicsAxesHandle& axes) {
                                           return axes.common.id == axesId && axes.logicalChannel == 0;
@@ -187,6 +220,12 @@ void GraphicsFigureModel::rebuildSignalChildren(const SignalData& data) {
     const std::uint64_t axesId = addAxesHandle(0, kDefaultMonoAxesPos).common.id;
     currentAxesId_ = axesId;
     addDefaultLine(axesId, 0, kDefaultLeftLineColor);
+  }
+  if (spectrumVisible_) {
+    addDerivedAxes(AxesRole::Spectrum);
+  }
+  if (spectrogramVisible_) {
+    addDerivedAxes(AxesRole::Spectrogram);
   }
 
   syncLineData(data);
@@ -293,6 +332,9 @@ std::uint64_t GraphicsFigureModel::addText(std::uint64_t parentId, double x, dou
 
 void GraphicsFigureModel::syncLineData(const SignalData& data) {
   for (auto& line : lines_) {
+    if (isSpectrumAxes(line.common.parentId)) {
+      continue;  // Spectrum lines are filled by setSpectrumData().
+    }
     line.xdata.clear();
     line.ydata.clear();
     if (line.logicalChannel < 0 || line.logicalChannel >= static_cast<int>(data.channels.size())) {
@@ -332,6 +374,9 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
   }
 
   for (auto& axes : axes_) {
+    if (axes.isDerived()) {
+      continue;
+    }
     bool any = false;
     double xmin = 0.0;
     double xmax = 1.0;
@@ -406,12 +451,26 @@ void GraphicsFigureModel::syncLineData(const SignalData& data) {
 }
 
 void GraphicsFigureModel::applyStereoLayout() {
-  if (axes_.size() < 2) {
-    if (!axes_.empty()) {
-      axes_.front().common.visible = true;
-      axes_.front().common.pos = kDefaultMonoAxesPos;
+  if (applySignalAxesLayout()) {
+    applySpectrumLayout();
+    applySpectrogramLayout();
+  }
+}
+
+bool GraphicsFigureModel::applySignalAxesLayout() {
+  const auto signalAxesCount = std::count_if(axes_.begin(), axes_.end(), [](const GraphicsAxesHandle& axes) {
+    return !axes.isDerived();
+  });
+  if (signalAxesCount < 2) {
+    auto firstIt = std::find_if(axes_.begin(), axes_.end(), [](const GraphicsAxesHandle& axes) {
+      return !axes.isDerived();
+    });
+    if (firstIt == axes_.end()) {
+      return false;
     }
-    return;
+    firstIt->common.visible = true;
+    firstIt->common.pos = kDefaultMonoAxesPos;
+    return true;
   }
 
   auto leftIt = std::find_if(axes_.begin(), axes_.end(), [](const GraphicsAxesHandle& axes) {
@@ -421,7 +480,7 @@ void GraphicsFigureModel::applyStereoLayout() {
     return axes.logicalChannel == 1;
   });
   if (leftIt == axes_.end() || rightIt == axes_.end()) {
-    return;
+    return false;
   }
 
   if (stereoOverlay()) {
@@ -441,6 +500,203 @@ void GraphicsFigureModel::applyStereoLayout() {
     leftIt->showXTickLabels = false;
     rightIt->showXTickLabels = true;
   }
+  return true;
+}
+
+void GraphicsFigureModel::applySpectrumLayout() {
+  if (!spectrumVisible_) {
+    return;
+  }
+  // Gap between the halves matches the default left margin so the spectrum's
+  // y tick labels have room.
+  constexpr double kGap = 0.06;
+  std::vector<std::uint64_t> shrunk;
+  for (auto& spectrum : axes_) {
+    if (spectrum.role != AxesRole::Spectrum) {
+      continue;
+    }
+    auto* source = axesByIdMutable(spectrum.sourceAxesId);
+    if (!source) {
+      spectrum.common.visible = false;
+      continue;
+    }
+    if (std::find(shrunk.begin(), shrunk.end(), source->common.id) == shrunk.end()) {
+      source->common.pos[2] = std::max(0.0, source->common.pos[2] - kGap) * 0.5;
+      shrunk.push_back(source->common.id);
+    }
+    spectrum.common.pos = source->common.pos;
+    spectrum.common.pos[0] = source->common.pos[0] + source->common.pos[2] + kGap;
+    spectrum.common.visible = source->common.visible;
+    spectrum.showXTickLabels = source->showXTickLabels;
+  }
+}
+
+void GraphicsFigureModel::applySpectrogramLayout() {
+  if (!spectrogramVisible_) {
+    return;
+  }
+  // Runs after applySpectrumLayout(), so a spectrum keeps the full height of
+  // its channel row while the waveform and spectrogram share it.
+  std::vector<std::uint64_t> split;
+  for (auto& spectrogram : axes_) {
+    if (spectrogram.role != AxesRole::Spectrogram) {
+      continue;
+    }
+    auto* source = axesByIdMutable(spectrogram.sourceAxesId);
+    if (!source) {
+      spectrogram.common.visible = false;
+      continue;
+    }
+    if (std::find(split.begin(), split.end(), source->common.id) != split.end()) {
+      continue;
+    }
+    split.push_back(source->common.id);
+    const double halfHeight = source->common.pos[3] * 0.5;
+    spectrogram.common.pos = source->common.pos;
+    spectrogram.common.pos[3] = halfHeight;
+    source->common.pos[1] += halfHeight;
+    source->common.pos[3] = halfHeight;
+    spectrogram.common.visible = source->common.visible;
+    // Stacked flush: the lower axes owns the time tick labels.
+    spectrogram.showXTickLabels = source->showXTickLabels;
+    source->showXTickLabels = false;
+  }
+}
+
+bool* GraphicsFigureModel::derivedVisibleFlag(AxesRole role) {
+  switch (role) {
+    case AxesRole::Spectrum:
+      return &spectrumVisible_;
+    case AxesRole::Spectrogram:
+      return &spectrogramVisible_;
+    case AxesRole::Signal:
+      break;
+  }
+  return nullptr;
+}
+
+void GraphicsFigureModel::addDerivedAxes(AxesRole role) {
+  struct Source {
+    std::uint64_t axesId;
+    int channel;
+    QColor color;
+  };
+  std::vector<Source> sources;
+  for (const auto& axes : axes_) {
+    if (axes.isDerived()) {
+      continue;
+    }
+    for (const auto& line : lines_) {
+      if (line.common.parentId == axes.common.id && line.logicalChannel >= 0) {
+        sources.push_back({axes.common.id, line.logicalChannel, line.common.color});
+        break;
+      }
+    }
+  }
+  for (const auto& source : sources) {
+    // logicalChannel -1 keeps derived axes out of the stereo-layout lookups.
+    auto& derived = addAxesHandle(-1, kDefaultMonoAxesPos);
+    derived.role = role;
+    derived.sourceAxesId = source.axesId;
+    derived.sourceChannel = source.channel;
+    if (role == AxesRole::Spectrum) {
+      addDefaultLine(derived.common.id, -1, source.color);
+    } else {
+      derived.xgrid = false;
+      derived.ygrid = false;
+    }
+  }
+}
+
+void GraphicsFigureModel::removeDerivedAxes(AxesRole role) {
+  std::vector<std::uint64_t> ids;
+  for (const auto& axes : axes_) {
+    if (axes.role == role) {
+      ids.push_back(axes.common.id);
+    }
+  }
+  for (const auto id : ids) {
+    figure_.common.children.erase(std::remove(figure_.common.children.begin(), figure_.common.children.end(), id),
+                                  figure_.common.children.end());
+    lines_.erase(std::remove_if(lines_.begin(), lines_.end(), [id](const GraphicsLineHandle& line) {
+                   return line.common.parentId == id;
+                 }),
+                 lines_.end());
+    texts_.erase(std::remove_if(texts_.begin(), texts_.end(), [id](const GraphicsTextHandle& text) {
+                   return text.common.parentId == id;
+                 }),
+                 texts_.end());
+    if (currentAxesId_ == id) {
+      const auto it = std::find_if(axes_.begin(), axes_.end(), [id](const GraphicsAxesHandle& axes) {
+        return axes.common.id == id;
+      });
+      currentAxesId_ = it != axes_.end() ? it->sourceAxesId : 0;
+    }
+  }
+  axes_.erase(std::remove_if(axes_.begin(), axes_.end(), [role](const GraphicsAxesHandle& axes) {
+                return axes.role == role;
+              }),
+              axes_.end());
+}
+
+void GraphicsFigureModel::setSpectrumVisible(bool visible) {
+  if (spectrumVisible_ == visible) {
+    return;
+  }
+  spectrumVisible_ = visible;
+  if (visible) {
+    addDerivedAxes(AxesRole::Spectrum);
+  } else {
+    removeDerivedAxes(AxesRole::Spectrum);
+  }
+  applyStereoLayout();
+}
+
+void GraphicsFigureModel::setSpectrogramVisible(bool visible) {
+  if (spectrogramVisible_ == visible) {
+    return;
+  }
+  spectrogramVisible_ = visible;
+  if (visible) {
+    addDerivedAxes(AxesRole::Spectrogram);
+  } else {
+    removeDerivedAxes(AxesRole::Spectrogram);
+  }
+  applyStereoLayout();
+}
+
+bool GraphicsFigureModel::setSpectrumData(int channel,
+                                          const QVector<double>& freqHz,
+                                          const QVector<double>& db,
+                                          double nyquistHz) {
+  auto axesIt = std::find_if(axes_.begin(), axes_.end(), [channel](const GraphicsAxesHandle& axes) {
+    return axes.role == AxesRole::Spectrum && axes.sourceChannel == channel;
+  });
+  if (axesIt == axes_.end()) {
+    return false;
+  }
+  auto lineIt = std::find_if(lines_.begin(), lines_.end(), [&axesIt](const GraphicsLineHandle& line) {
+    return line.common.parentId == axesIt->common.id;
+  });
+  if (lineIt == lines_.end()) {
+    return false;
+  }
+  lineIt->xdata = freqHz;
+  lineIt->ydata = db;
+  if (axesIt->autoXLim) {
+    axesIt->xlim = {0.0, std::max(1.0, nyquistHz)};
+  }
+  if (axesIt->autoYLim) {
+    axesIt->ylim = {-80.0, 0.0};  // dB relative to the spectrum peak
+  }
+  return true;
+}
+
+AxesRole GraphicsFigureModel::axesRole(std::uint64_t axesId) const {
+  const auto it = std::find_if(axes_.begin(), axes_.end(), [axesId](const GraphicsAxesHandle& axes) {
+    return axes.common.id == axesId;
+  });
+  return it == axes_.end() ? AxesRole::Signal : it->role;
 }
 
 std::uint64_t GraphicsFigureModel::nextId() {
@@ -483,11 +739,39 @@ bool GraphicsFigureModel::removeAxes(std::uint64_t axesId) {
                }),
                lines_.end());
 
+  const bool wasDerived = axesIt->isDerived();
   axes_.erase(axesIt);
   if (currentAxesId_ == axesId) {
     currentAxesId_ = 0;
   }
-  channelCount_ = static_cast<int>(axes_.size());
+  if (!wasDerived) {
+    // Derived axes are meaningless without their source signal axes.
+    std::vector<std::uint64_t> orphans;
+    for (const auto& axes : axes_) {
+      if (axes.sourceAxesId == axesId) {
+        orphans.push_back(axes.common.id);
+      }
+    }
+    for (const auto orphanId : orphans) {
+      removeAxes(orphanId);
+    }
+  }
+  channelCount_ = static_cast<int>(std::count_if(axes_.begin(), axes_.end(), [](const GraphicsAxesHandle& axes) {
+    return !axes.isDerived();
+  }));
+  bool layoutChanged = false;
+  for (const AxesRole role : {AxesRole::Spectrum, AxesRole::Spectrogram}) {
+    bool* visible = derivedVisibleFlag(role);
+    if (*visible && std::none_of(axes_.begin(), axes_.end(), [role](const GraphicsAxesHandle& axes) {
+          return axes.role == role;
+        })) {
+      *visible = false;
+      layoutChanged = true;
+    }
+  }
+  if (layoutChanged) {
+    applyStereoLayout();
+  }
   return true;
 }
 
