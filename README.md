@@ -205,6 +205,33 @@ to another UDF:
 
 `clear` removes variables only; it does not unload a UDF.
 
+### External Modules
+
+External native modules (compiled C/C++ libraries) are an `auxe` feature, so they work
+the same in auxlab2 as in any other host. Import a module before calling its functions,
+then call them through the module name or an alias:
+
+```
+import("wsola")
+y = wsola::wsola_timestretch(x, 1.5)
+
+import("wsola", "ws")
+y = x.ws::wsola_timestretch(1.5)
+```
+
+- Module functions are not global builtins: `wsola_timestretch(x, 1.5)` fails even after
+  the import. Always use the `module::` (or `alias::`) prefix.
+- `import` looks for a folder named after the module in each directory listed in
+  `AUXE_MODULE_PATH`, then in `~/.auxe/modules` (macOS/Linux) or
+  `%LOCALAPPDATA%\auxe\modules` (Windows).
+- When auxlab2 is launched from Finder/Dock on macOS, it does not see environment
+  variables set in your shell profile, so `AUXE_MODULE_PATH` may be missing. Install
+  modules under `~/.auxe/modules`, or start auxlab2 from a terminal.
+
+For the module folder layout, manifest format, the C API for writing a module, and the
+full list of import errors, see
+[`aux_engine/docs/external_modules.md`](../aux_engine/docs/external_modules.md).
+
 ### History Box
 
 - `Enter` on selected row: inject command into console input line

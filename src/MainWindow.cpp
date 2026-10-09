@@ -456,11 +456,20 @@ QStringList splitTopLevelArgs(const QString& text) {
   return out;
 }
 
+// Splits at top-level ',' / ';' separators. Separators inside (), [], {}, strings, or an
+// if/for/while/switch/try/function ... end block are not split points, so a one-line block
+// such as "for k=1:3, x++=k; end" stays one statement. A ';' stays attached to its statement
+// so echo suppression is preserved.
 QStringList splitTopLevelStatements(const QString& text) {
+  static const QSet<QString> kBlockOpeners = {
+      QStringLiteral("if"), QStringLiteral("for"), QStringLiteral("while"),
+      QStringLiteral("switch"), QStringLiteral("try"), QStringLiteral("function")};
   QStringList out;
   QString current;
   int paren = 0;
   int bracket = 0;
+  int brace = 0;
+  int blockDepth = 0;
   bool inString = false;
   for (int i = 0; i < text.size(); ++i) {
     const QChar ch = text[i];
@@ -474,8 +483,33 @@ QStringList splitTopLevelStatements(const QString& text) {
       else if (ch == ')') --paren;
       else if (ch == '[') ++bracket;
       else if (ch == ']') --bracket;
-      else if ((ch == ',' || ch == ';') && paren == 0 && bracket == 0) {
-        if (!current.trimmed().isEmpty()) {
+      else if (ch == '{') ++brace;
+      else if (ch == '}') --brace;
+      else if ((ch.isLetter() || ch == '_') &&
+               (i == 0 || !(text[i - 1].isLetterOrNumber() || text[i - 1] == '_'))) {
+        int j = i;
+        while (j < text.size() && (text[j].isLetterOrNumber() || text[j] == '_')) {
+          ++j;
+        }
+        const QString word = text.mid(i, j - i);
+        const bool isMember = i > 0 && text[i - 1] == '.';
+        if (!isMember && paren == 0 && bracket == 0 && brace == 0) {
+          if (kBlockOpeners.contains(word)) {
+            ++blockDepth;
+          } else if (word == QStringLiteral("end")) {
+            blockDepth = std::max(0, blockDepth - 1);
+          }
+        }
+        current += word;
+        i = j - 1;
+        continue;
+      }
+      else if ((ch == ',' || ch == ';') && paren == 0 && bracket == 0 && brace == 0 &&
+               blockDepth == 0) {
+        if (ch == ';') {
+          current += ch;
+        }
+        if (!current.trimmed().isEmpty() && current.trimmed() != QStringLiteral(";")) {
           out.push_back(current.trimmed());
         }
         current.clear();
