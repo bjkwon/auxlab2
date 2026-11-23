@@ -84,9 +84,7 @@ public:
   void clearPlaybackBackend();
   EvalResult eval(const std::string& command);
   int pollAsync();
-  std::shared_ptr<const auxProgressiveAudio> progressiveAudio(const std::string& name) const {
-    return aux_progressive_audio(aux_get_var(activeCtx_, name));
-  }
+  std::shared_ptr<const auxProgressiveAudio> progressiveAudio(const std::string& path) const;
 
   static QString playAssignmentDestination(const std::string& command);
   std::vector<std::string> variableNames() const;

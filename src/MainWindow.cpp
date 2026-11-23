@@ -4031,10 +4031,8 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
     }
     const std::uint64_t id = targetWindow ? targetWindow->graphicsModel().figure().common.id : 0;
     progressivePlots_.erase(id);
-    if (isSimpleIdentifier(expr)) {
-      if (auto source = engine_.progressiveAudio(expr.toStdString()))
-        progressivePlots_[id] = {targetWindow, source, sig->channels.front().samples.size()};
-    }
+    if (auto source = engine_.progressiveAudio(expr.trimmed().toStdString()))
+      progressivePlots_[id] = {targetWindow, source, sig->channels.front().samples.size()};
     return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 

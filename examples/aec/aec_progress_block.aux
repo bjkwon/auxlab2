@@ -3,8 +3,6 @@ function out = aec_progress_block(chunk, timestamp, prior, first, microphone, ad
 if first
     out.state.w = zeros(taps)
     out.state.u = zeros(taps)
-    out.clean = []
-    out.estimated = []
     out.samples = 0
 else
     out = prior
@@ -12,8 +10,21 @@ end
 start = out.samples + 1
 last = out.samples + length(chunk)
 [e, y, state] = aec_nlms(vector(chunk), microphone(start:last), adapt(start:last), out.state, mu)
-out.clean ++= e
-out.estimated ++= y
+// Copy the audio block so the outputs retain its sample rate.
+cleanBlock = chunk
+estimatedBlock = chunk
+cleanBlock(1:length(e)) = e
+estimatedBlock(1:length(y)) = y
+if first
+    out.clean = cleanBlock
+    out.estimated = estimatedBlock
+else
+    out.clean ++= cleanBlock
+    out.estimated ++= estimatedBlock
+end
+// Publish the processed audio through the job handle as well.
+out.h.completed = out.clean
+out.h.stream = 1
 out.state = state
 out.samples = last
 out.last_block_ms = timestamp

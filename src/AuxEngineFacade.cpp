@@ -760,6 +760,22 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
   return out;
 }
 
+std::shared_ptr<const auxProgressiveAudio> AuxEngineFacade::progressiveAudio(const std::string& path) const {
+  const auto firstDot = path.find('.');
+  const std::string root = path.substr(0, firstDot);
+  if (!activeCtx_ || !isIdent(root)) return nullptr;
+  AuxObj obj = aux_get_var(activeCtx_, root);
+  size_t pos = firstDot;
+  while (obj && pos != std::string::npos) {
+    const size_t start = pos + 1;
+    pos = path.find('.', start);
+    const std::string member = path.substr(start, pos - start);
+    if (!isIdent(member)) return nullptr;
+    obj = aux_get_struct_member(obj, member);
+  }
+  return aux_progressive_audio(obj);
+}
+
 int AuxEngineFacade::pollAsync() {
   if (!activeCtx_ && !rootCtx_) {
     return 0;

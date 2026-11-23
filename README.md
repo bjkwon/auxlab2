@@ -327,3 +327,5 @@ ev.levels
 ```
 
 Use `x` in place of `y` to run the same detector on complete input. The callback filters each window with carried state and stores the sample-derived start time in milliseconds and AUX RMS in dB for each window strictly above the threshold. Windows start from the beginning even when the consumer attaches late. The last partial window is evaluated at its actual length. Callback failures are reported in `ev.h.error`.
+
+See [PROGBLOCKS.md](PROGBLOCKS.md) for the callback contract, progress fields, limitations, and AEC example.

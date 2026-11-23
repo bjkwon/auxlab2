@@ -159,30 +159,42 @@ With progressive mode available in the engine, set the runtime sampling rate to
 
 ```aux
 s = aec_setup(10);
-r <~ progblocks(s.reference, 100, "aec_progress_block", vector(s.microphone), s.adapt, s.taps, .5)
+r <~ progblocks(s.reference, 100, "aec_progress_block", s.microphone, s.adapt, s.taps, .5)
 r.h.status
-r.h.completed
+r.h.samples_completed
 r.samples
 ```
 
 `aec_setup` prepares the same predefined signals as `aec_demo` without running
 NLMS. The reducer calls `aec_progress_block` on successive 100 ms blocks and
 publishes the accumulated result between batches. `r.clean` and `r.estimated`
-are vectors containing the completed prefix, and `r.state.w` and `r.state.u`
+are audio objects containing the completed prefix, and `r.state.w` and `r.state.u`
 carry the adaptive filter across blocks. Inspect `r.h.error` if the status is
-`error`. Once at least one block has completed, take a snapshot or inspect the
-completed result after status becomes `done`:
+`error`. Once at least one block has completed, plot the growing clean output:
 
 ```aux
-clean = audio(r.clean);
-plot(clean)
-play(clean)
+plot(r.h.completed)
 ```
 
-Reissue the snapshot and plot to inspect a later prefix. Reducer results are
-published as a struct; they are not a progressively linked audio source, so
-plotting or playing `clean` does not automatically follow later blocks. The
-callback runs on the evaluator thread in batches, and this interpreted NLMS
+`r.h.completed` also contains the completed clean audio. The number of samples
+processed is `r.h.samples_completed`.
+
+After the first block is available, play the growing clean output directly:
+
+```aux
+p = play(r.h.completed)
+p.underflow_count
+stop(p)
+```
+
+Playback follows new blocks until processing and playback finish. If playback
+catches the producer, it inserts silence and resumes at the first unplayed
+sample. `p.underflow_count` counts interruptions; `p.underflow_duration` is in
+milliseconds. Assigning `clean = r.h.completed` creates a snapshot, so pass
+`r.h.completed` directly to `play` for continuous playback. The plot likewise
+follows `r.h.completed` when used directly; plotting the `clean` snapshot does
+not. The callback runs on the evaluator thread one block
+at a time, and this interpreted NLMS
 remains computationally expensive, particularly at 48 kHz. Start with 10 seconds
 at 8 kHz. The known adaptation mask is aligned with the reference and microphone;
 it is still an oracle, not a double-talk detector.
