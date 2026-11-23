@@ -1,0 +1,44 @@
+function result = aec_setup(seconds)
+// Prepare the same simulation as aec_demo, without running the canceller.
+fs = getfs()
+if seconds < 10
+    error("Use at least 10 seconds so all demonstration phases are present")
+end
+N = round(seconds * fs)
+k = 1:N
+t = (k - 1) / fs
+// Deterministic broadband test excitation, generated once before processing.
+// This is a synthetic identification probe, not a speech-quality benchmark.
+q = abs(sin(k * 12.9898)) * 43758.5453
+x = .25 * (2 * (q - floor(q)) - 1)
+near = zeros(N)
+// Two known double-talk intervals: 25-42% and 75-83% of the recording.
+talk = zeros(N)
+talk(round(.25*N)+1:round(.42*N)) = 1
+talk(round(.75*N)+1:round(.83*N)) = 1
+near = .12 * (sin(2*pi*233*t) + .4*sin(2*pi*467*t)) * talk
+// Two room responses, both within the adaptive filter's 32 ms span.
+M = round(.032 * fs)
+h1 = zeros(M)
+h1(round(.006*fs) + 1) = .65
+h1(round(.013*fs) + 1) = -.28
+h1(round(.023*fs) + 1) = .16
+h2 = zeros(M)
+h2(round(.009*fs) + 1) = .48
+h2(round(.018*fs) + 1) = .32
+h2(round(.027*fs) + 1) = -.19
+echo = filt(x, h1)
+echo2 = filt(x, h2)
+change = round(.58 * N)
+echo(change:N) = echo2(change:N)
+mic = echo + near
+// This oracle mask uses the simulation schedule, not a real double-talk detector.
+adapt = 1 - talk
+result.reference = audio(x)
+result.microphone = audio(mic)
+result.near = audio(near)
+result.echo = audio(echo)
+result.adapt = adapt
+result.room_final = h2
+result.fs = fs
+result.taps = M

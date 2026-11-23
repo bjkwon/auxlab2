@@ -151,3 +151,38 @@ double-talk handling, and residual-echo suppression are outside this example.
 Background: [MathWorks acoustic echo cancellation example](https://www.mathworks.com/help/audio/ug/acoustic-echo-cancellation-aec.html)
 describes the same reference/microphone/near-end arrangement and adaptation control.
 
+
+## Progressive processing
+
+With progressive mode available in the engine, set the runtime sampling rate to
+8000 and run these commands from this directory:
+
+```aux
+s = aec_setup(10);
+r <~ progblocks(s.reference, 100, "aec_progress_block", vector(s.microphone), s.adapt, s.taps, .5)
+r.h.status
+r.h.completed
+r.samples
+```
+
+`aec_setup` prepares the same predefined signals as `aec_demo` without running
+NLMS. The reducer calls `aec_progress_block` on successive 100 ms blocks and
+publishes the accumulated result between batches. `r.clean` and `r.estimated`
+are vectors containing the completed prefix, and `r.state.w` and `r.state.u`
+carry the adaptive filter across blocks. Inspect `r.h.error` if the status is
+`error`. Once at least one block has completed, take a snapshot or inspect the
+completed result after status becomes `done`:
+
+```aux
+clean = audio(r.clean);
+plot(clean)
+play(clean)
+```
+
+Reissue the snapshot and plot to inspect a later prefix. Reducer results are
+published as a struct; they are not a progressively linked audio source, so
+plotting or playing `clean` does not automatically follow later blocks. The
+callback runs on the evaluator thread in batches, and this interpreted NLMS
+remains computationally expensive, particularly at 48 kHz. Start with 10 seconds
+at 8 kHz. The known adaptation mask is aligned with the reference and microphone;
+it is still an oracle, not a double-talk detector.
