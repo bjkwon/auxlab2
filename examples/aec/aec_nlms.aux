@@ -1,0 +1,30 @@
+function [clean, estimated, state] = aec_nlms(reference, microphone, adapt, state, mu)
+// Offline, mono, real-valued NLMS. All inputs/outputs are sample vectors.
+// state.w: FIR coefficients, state.u: reference delay line, newest sample first.
+// adapt is a per-sample 0/1 mask. Pass the returned state to the next chunk.
+if length(reference) != length(microphone) || length(adapt) != length(reference)
+    error("reference, microphone and adapt must have equal lengths")
+end
+if mu <= 0 || mu >= 2
+    error("Use an NLMS step size between 0 and 2")
+end
+w = state.w
+u = state.u
+M = length(w)
+if M < 2 || length(u) != M
+    error("Initialize state.w and state.u with zeros(M), M >= 2")
+end
+clean = zeros(length(reference))
+estimated = zeros(length(reference))
+for n = 1:length(reference)
+    u = [reference(n) u(1:M-1)]
+    estimated(n) = sum(w * u)
+    clean(n) = microphone(n) - estimated(n)
+    energy = sum(u * u)
+    if adapt(n) > .5 && energy > 1e-10
+        w += (mu * clean(n) / (energy + 1e-8)) * u
+    end
+end
+state.w = w
+state.u = u
+
