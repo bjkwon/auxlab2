@@ -1,0 +1,15 @@
+function out = detect_loud_blocks(chunk, timestamp, prior, first, b, threshold)
+if first
+    out.times = []
+    out.levels = []
+    [filtered, state] = filt(chunk, b)
+else
+    out = prior
+    [filtered, state] = filt(chunk, b, 1, prior.state)
+end
+out.state = state
+level = rms(filtered)
+if level > threshold
+    out.times ++= timestamp
+    out.levels ++= level
+end

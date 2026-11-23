@@ -11,6 +11,7 @@ class StructMembersWindow : public QWidget {
 public:
   StructMembersWindow(const QString& structPath, const std::vector<VarSnapshot>& members, QWidget* parent = nullptr);
   QString structPath() const;
+  void setMembers(const std::vector<VarSnapshot>& members);
 
 signals:
   void requestOpenGraph(const QString& fullPath);

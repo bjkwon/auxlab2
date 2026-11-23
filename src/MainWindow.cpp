@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ProgressivePlaybackDevice.h"
 
 #include "BinaryObjectWindow.h"
 #include "CellMembersWindow.h"
@@ -1098,6 +1099,15 @@ MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
+  // Docked figures are deleted by the QWidget base destructor after our
+  // window registry and tab layout are gone.
+  for (const auto& entry : scopedWindows_) {
+    if (entry.window) {
+      entry.window->disconnect(this);
+      entry.window->removeEventFilter(this);
+    }
+  }
+
   if (shellProcess_ && shellProcess_->state() != QProcess::NotRunning) {
     // Don't leave a running shell command (or its pipeline) behind.
     shellProcess_->disconnect(this);
@@ -1116,6 +1126,7 @@ MainWindow::~MainWindow() {
   }
   for (auto& entry : playbackSessions_) {
     if (entry.second.sink) {
+      entry.second.sink->disconnect(this);
       entry.second.sink->stop();
     }
     if (entry.second.buffer) {
@@ -1260,6 +1271,10 @@ std::uint64_t MainWindow::createGraphicsPlot(std::uint64_t targetHandleId,
                                        styleSpec.lineStyle);
   }
 
+  const auto figure = targetWindow->graphicsModel().figure().common.id;
+  progressivePlots_.erase(figure);
+  if (auto source = aux_progressive_audio(obj))
+    progressivePlots_[figure] = {targetWindow, source, sig->channels.front().samples.size()};
   return targetWindow ? targetWindow->graphicsModel().figure().common.id : 0;
 }
 
@@ -2745,10 +2760,10 @@ bool MainWindow::isReservedUndoVariable(const QString& varName) const {
 
 QStringList MainWindow::userVariableNames() const {
   QStringList out;
-  const auto vars = engine_.listVariables();
-  out.reserve(static_cast<qsizetype>(vars.size()));
-  for (const auto& var : vars) {
-    const QString name = QString::fromStdString(var.name);
+  const auto names = engine_.variableNames();
+  out.reserve(static_cast<qsizetype>(names.size()));
+  for (const auto& var : names) {
+    const QString name = QString::fromStdString(var);
     if (!isReservedUndoVariable(name)) {
       out.push_back(name);
     }
@@ -2758,10 +2773,12 @@ QStringList MainWindow::userVariableNames() const {
   return out;
 }
 
-MainWindow::ObjectUndoCheckpoint MainWindow::captureObjectUndoCheckpoint(const QString& label) {
+MainWindow::ObjectUndoCheckpoint MainWindow::captureObjectUndoCheckpoint(const QString& label, const QString& destination) {
   ObjectUndoCheckpoint checkpoint;
   checkpoint.label = label;
-  checkpoint.userVars = userVariableNames();
+  checkpoint.destination = destination;
+  if (destination.isEmpty()) checkpoint.userVars = userVariableNames();
+  else if (userVariableNames().contains(destination)) checkpoint.userVars.push_back(destination);
   checkpoint.checkpointVars.reserve(checkpoint.userVars.size());
 
   const int serial = ++undoCheckpointSerial_;
@@ -2805,7 +2822,7 @@ bool MainWindow::restoreObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpo
     return false;
   }
 
-  const QStringList currentVars = userVariableNames();
+  const QStringList currentVars = checkpoint.destination.isEmpty() ? userVariableNames() : QStringList{checkpoint.destination};
   for (const QString& name : currentVars) {
     if (!checkpoint.userVars.contains(name)) {
       engine_.deleteVar(name.toStdString());
@@ -2829,7 +2846,7 @@ void MainWindow::undoObjectCommand() {
     return;
   }
 
-  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("redo"));
+  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("redo"), undoStack_.back().destination);
   if (current.label.isEmpty()) {
     commandBox_->appendExecutionResult(QStringLiteral("Error: failed to create redo checkpoint."));
     return;
@@ -2863,7 +2880,7 @@ void MainWindow::redoObjectCommand() {
     return;
   }
 
-  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("undo"));
+  ObjectUndoCheckpoint current = captureObjectUndoCheckpoint(QStringLiteral("undo"), redoStack_.back().destination);
   if (current.label.isEmpty()) {
     commandBox_->appendExecutionResult(QStringLiteral("Error: failed to create undo checkpoint."));
     return;
@@ -2944,7 +2961,10 @@ void MainWindow::runCommandInternal(const QString& cmd, bool addToHistory, bool 
   }
 
   if (allowUndoCheckpoint && shouldCreateObjectUndoCheckpoint(actual)) {
-    ObjectUndoCheckpoint checkpoint = captureObjectUndoCheckpoint(historyCommand);
+    // A direct play assignment only binds the returned handle. Avoid
+    // checkpointing unrelated (potentially multi-hour) audio for this command.
+    const QString dest = AuxEngineFacade::playAssignmentDestination(actual.toStdString());
+    ObjectUndoCheckpoint checkpoint = captureObjectUndoCheckpoint(historyCommand, dest);
     if (!checkpoint.label.isEmpty()) {
       undoStack_.push_back(std::move(checkpoint));
       pruneObjectUndoStack();
@@ -3264,6 +3284,14 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   if (assignMatch.hasMatch()) {
     lhs = assignMatch.captured(1).trimmed();
     normalized = assignMatch.captured(2).trimmed();
+  }
+
+  // A graphics handle probe may evaluate its argument. Starting or stopping
+  // audio, or launching a producer, must happen exactly once in the evaluator.
+  static const QRegularExpression audioCommand(R"(^(?:play|stop|pause|resume)\s*\()");
+  static const QRegularExpression progressiveAssignment(R"(^[A-Za-z_]\w*\s*<~)");
+  if (audioCommand.match(normalized).hasMatch() || progressiveAssignment.match(trimmed).hasMatch()) {
+    return false;
   }
 
   static const QRegularExpression kMethodAxesNoArg(R"(^([A-Za-z_][A-Za-z0-9_]*)\.axes\s*\(\s*\)$)");
@@ -4002,6 +4030,11 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
                                          styleSpec.lineStyle);
     }
     const std::uint64_t id = targetWindow ? targetWindow->graphicsModel().figure().common.id : 0;
+    progressivePlots_.erase(id);
+    if (isSimpleIdentifier(expr)) {
+      if (auto source = engine_.progressiveAudio(expr.toStdString()))
+        progressivePlots_[id] = {targetWindow, source, sig->channels.front().samples.size()};
+    }
     return finalizeHandleOutput(id == 0 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{id}, graphicsHandleText(id));
   }
 
@@ -4258,6 +4291,24 @@ void MainWindow::onAsyncPollTick() {
   refreshPlaybackHandles();
   processRecordingSessions();
   const int changed = engine_.pollAsync();
+  for (auto it = progressivePlots_.begin(); it != progressivePlots_.end();) {
+    auto& link = it->second;
+    const size_t ready = link.source->ready();
+    if (link.window && ready != link.displayed) {
+      auto data = std::make_shared<SignalData>();
+      data->sampleRate = link.source->sampleRate;
+      data->isAudio = data->sampleRate > 1;
+      data->startTimeSec = link.source->startMs / 1000.0;
+      data->channels.resize(1);
+      data->channels.front().samples.assign(link.source->samples(), link.source->samples()+ready);
+      data->channels.front().segments.push_back({0, static_cast<int>(ready)});
+      link.window->updateData(data);
+      link.displayed = ready;
+    }
+    if (!link.window || ready == link.source->totalFrames || link.source->canceled())
+      it = progressivePlots_.erase(it);
+    else ++it;
+  }
   if (changed <= 0) {
     return;
   }
@@ -4617,10 +4668,14 @@ void MainWindow::refreshVariables() {
       QString fullIntervalsText = fullInfo;
       QString durationsText;
       QString fullDurationsText;
-      const SignalDataPtr signalData = engine_.getSignalData(v.name);
+      const auto signalData = engine_.getAudioLayout(v.name);
       if (signalData && signalData->isAudio && signalData->sampleRate > 0) {
         if (!signalData->channels.empty() && allChannelTimelinesMatch(*signalData)) {
-          sizeText = QString::number(signalData->channels.front().samples.size());
+          qint64 length = 0;
+          for (const auto& seg : signalData->channels.front().segments) {
+            length = std::max(length, static_cast<qint64>(seg.startSample) + seg.length);
+          }
+          sizeText = QString::number(length);
         }
         fullIntervalsText = audioIntervalsText(*signalData);
         intervalsText = truncateDisplayText(fullIntervalsText);
@@ -5333,8 +5388,9 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     return false;
   }
 
-  const auto sig = buildSignalDataFromAuxObj(obj, 22050);
-  if (!sig || !sig->isAudio || sig->channels.empty()) {
+  const auto stream = aux_progressive_audio(obj);
+  const auto sig = stream ? nullptr : buildSignalDataFromAuxObj(obj, 22050);
+  if (stream ? stream->sampleRate <= 1 : (!sig || !sig->isAudio || sig->channels.empty())) {
     err = "play() requires an audio object.";
     return false;
   }
@@ -5353,23 +5409,29 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
   }
   varPcmData_.clear();
 
-  const int sampleRate = sig->sampleRate > 0 ? sig->sampleRate : 22050;
-  const double onePassDurationMs = sig->startTimeSec * 1000.0 +
-                                   (sig->channels.empty() ? 0.0
-                                                          : 1000.0 * static_cast<double>(sig->channels.front().samples.size()) /
-                                                                static_cast<double>(sampleRate));
-  int channelCount = 0;
+  const int sampleRate = stream ? stream->sampleRate : sig->sampleRate;
+  int channelCount = 1;
   int onePassFrames = 0;
-  QByteArray onePassPcm = buildAudioPcm16(*sig, channelCount, onePassFrames);
+  QByteArray onePassPcm;
+  if (stream) {
+    const double lead = std::max(0.0, std::round(stream->startMs * sampleRate / 1000.0));
+    if ((lead + stream->totalFrames) * repeatCount > std::numeric_limits<int>::max()) {
+      err = "Playback duration exceeds the supported frame count.";
+      return false;
+    }
+    onePassFrames = static_cast<int>(lead + stream->totalFrames);
+  } else {
+    onePassPcm = buildAudioPcm16(*sig, channelCount, onePassFrames);
+  }
   if (onePassFrames <= 0 || channelCount <= 0) {
     err = "play() received empty audio.";
     return false;
   }
-
+  const double onePassDurationMs = 1000.0 * onePassFrames / sampleRate;
   QByteArray repeatedPcm;
-  repeatedPcm.reserve(onePassPcm.size() * repeatCount);
-  for (int i = 0; i < repeatCount; ++i) {
-    repeatedPcm += onePassPcm;
+  if (!stream) {
+    repeatedPcm.reserve(onePassPcm.size() * repeatCount);
+    for (int i = 0; i < repeatCount; ++i) repeatedPcm += onePassPcm;
   }
   auto it = playbackSessions_.find(handleId);
   if (reuseExistingHandle) {
@@ -5378,6 +5440,10 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
       return false;
     }
     PlaybackSession& session = it->second;
+    if (stream || dynamic_cast<ProgressivePlaybackDevice*>(session.buffer)) {
+      err = "Queueing another signal on progressive playback is unsupported.";
+      return false;
+    }
     if ((!session.paused && (!session.sink || !session.buffer ||
          session.sink->state() == QAudio::IdleState || session.sink->state() == QAudio::StoppedState)) ||
         session.sampleRate != sampleRate || session.channelCount != channelCount) {
@@ -5386,7 +5452,7 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     }
     session.pcmData += repeatedPcm;
     if (session.buffer) {
-      session.buffer->buffer().append(repeatedPcm);
+      static_cast<QBuffer*>(session.buffer)->buffer().append(repeatedPcm);
     }
     int cumulativeEnd = session.segmentEndFrames.empty() ? 0 : session.segmentEndFrames.back();
     for (int i = 0; i < repeatCount; ++i) {
@@ -5404,7 +5470,8 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
 
   for (auto& entry : playbackSessions_) {
     PlaybackSession& existing = entry.second;
-    engine_.updateRuntimeHandleMembers(existing.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+    updatePlaybackStats(existing);
+    engine_.updateRuntimeHandleMembers(existing.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}, {"active", 0.0}, {"paused", 0.0}});
     if (existing.buffer) {
       existing.buffer->close();
     }
@@ -5436,29 +5503,53 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
     session.segmentEndFrames.push_back(cumulativeEnd);
   }
 
-  QAudioFormat fmt;
-  fmt.setSampleRate(session.sampleRate);
-  fmt.setChannelCount(session.channelCount);
-  fmt.setSampleFormat(QAudioFormat::Int16);
-
-  session.buffer = new QBuffer(this);
-  session.buffer->setData(session.pcmData);
-  session.buffer->open(QIODevice::ReadOnly);
-
-  session.sink = new QAudioSink(fmt, this);
-  connect(session.sink, &QAudioSink::stateChanged, this, [this](QAudio::State) {
-    refreshPlaybackHandles();
-  });
-  session.sink->start(session.buffer);
+  if (stream) {
+    auto* reader = new ProgressivePlaybackDevice(stream, repeatCount, this);
+    session.buffer = reader;
+    session.totalFrames = reader->totalFrames();
+    session.durationMs = 1000.0 * session.totalFrames / sampleRate;
+    session.segmentEndFrames.clear();
+    for (int i = 1; i <= repeatCount; ++i) session.segmentEndFrames.push_back(i * reader->passFrames());
+    session.pcmData.clear();
+  } else {
+    auto* buffer = new QBuffer(this);
+    buffer->setData(session.pcmData);
+    buffer->open(QIODevice::ReadOnly);
+    session.buffer = buffer;
+  }
 
   playbackSessions_[handleId] = std::move(session);
+  if (stream) {
+    // Bind the handle before opening the hardware. The first Core Audio
+    // device open can take appreciably longer than a normal buffer pull.
+    QTimer::singleShot(0, this, [this, handleId] {
+      auto it = playbackSessions_.find(handleId);
+      if (it == playbackSessions_.end() || it->second.paused || it->second.sink) return;
+      openPlaybackSink(it->second);
+      refreshPlaybackHandles();
+    });
+  } else {
+    openPlaybackSink(playbackSessions_.at(handleId));
+  }
   engine_.updateRuntimeHandleMembers(handleId,
                                      {{"fs", static_cast<double>(playbackSessions_[handleId].sampleRate)},
                                       {"dur", playbackSessions_[handleId].durationMs},
                                       {"repeat_left", static_cast<double>(std::max(0, static_cast<int>(playbackSessions_[handleId].segmentEndFrames.size()) - 1))},
                                       {"prog", 0.0}});
-  refreshVariables();
   return true;
+}
+
+void MainWindow::openPlaybackSink(PlaybackSession& session) {
+  QAudioFormat fmt;
+  fmt.setSampleRate(session.sampleRate);
+  fmt.setChannelCount(session.channelCount);
+  fmt.setSampleFormat(QAudioFormat::Int16);
+
+  session.sink = new QAudioSink(fmt, this);
+  connect(session.sink, &QAudioSink::stateChanged, this, [this](QAudio::State) {
+    refreshPlaybackHandles();
+  }, Qt::QueuedConnection);
+  session.sink->start(session.buffer);
 }
 
 bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
@@ -5472,6 +5563,21 @@ bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
 
   if (command != auxPlaybackCommand::AUX_PLAYBACK_STOP) {
     PlaybackSession& session = it->second;
+    if (dynamic_cast<ProgressivePlaybackDevice*>(session.buffer)) {
+      if (command == auxPlaybackCommand::AUX_PLAYBACK_PAUSE) {
+        session.paused = true;
+        if (session.sink) session.sink->suspend();
+        engine_.updateRuntimeHandleMembers(handleId, {{"paused", 1.0}});
+        return true;
+      }
+      if (command == auxPlaybackCommand::AUX_PLAYBACK_RESUME) {
+        session.paused = false;
+        if (session.sink) session.sink->resume();
+        else openPlaybackSink(session);
+        engine_.updateRuntimeHandleMembers(handleId, {{"paused", 0.0}});
+        return true;
+      }
+    }
     switch (command) {
       case auxPlaybackCommand::AUX_PLAYBACK_PAUSE: {
         if (session.paused) {
@@ -5530,7 +5636,7 @@ bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
         fmt.setChannelCount(session.channelCount);
         fmt.setSampleFormat(QAudioFormat::Int16);
         session.buffer = new QBuffer(this);
-        session.buffer->setData(session.pcmData);
+        static_cast<QBuffer*>(session.buffer)->setData(session.pcmData);
         session.buffer->open(QIODevice::ReadOnly);
         session.buffer->seek(session.pausedBytes);
         session.sink = new QAudioSink(fmt, this);
@@ -5564,7 +5670,8 @@ bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
 
   for (auto& entry : playbackSessions_) {
     PlaybackSession& session = entry.second;
-    engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+    updatePlaybackStats(session);
+    engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}, {"active", 0.0}, {"paused", 0.0}});
     if (session.buffer) {
       session.buffer->close();
     }
@@ -6087,12 +6194,41 @@ bool MainWindow::controlAsyncRecordHandle(std::uint64_t handleId,
   return false;
 }
 
+void MainWindow::updatePlaybackStats(PlaybackSession& session) {
+  const auto now = std::chrono::steady_clock::now();
+  // Some sinks report UnderrunError when they reach normal EOF.
+  const bool starved = session.sink && !session.paused && session.buffer && !session.buffer->atEnd()
+      && session.sink->error() == QAudio::UnderrunError;
+  if (starved && !session.deviceStarved) {
+    ++session.deviceUnderflows;
+    session.deviceStarvedSince = now;
+  }
+  if (!starved && session.deviceStarved)
+    session.deviceStarvedMs += std::chrono::duration<double, std::milli>(now-session.deviceStarvedSince).count();
+  session.deviceStarved = starved;
+  double ms = session.deviceStarvedMs;
+  if (starved) ms += std::chrono::duration<double, std::milli>(now-session.deviceStarvedSince).count();
+  double count = session.deviceUnderflows;
+  std::map<std::string, double> stats;
+  if (auto* reader = dynamic_cast<ProgressivePlaybackDevice*>(session.buffer)) {
+    stats["source_underflow_count"] = reader->episodes.load();
+    count += stats["source_underflow_count"];
+    ms += 1000.0 * reader->silence.load() / session.sampleRate;
+    stats["underflow_blocks"] = reader->shortRequests.load();
+    stats["blocks_requested"] = reader->requests.load();
+  }
+  stats["underflow_count"] = count;
+  stats["underflow_duration"] = ms;
+  engine_.updateRuntimeHandleMembers(session.handleId, stats);
+}
+
 void MainWindow::refreshPlaybackHandles() {
+  if (playbackSessions_.empty()) return;
   bool anyFinished = false;
   for (auto it = playbackSessions_.begin(); it != playbackSessions_.end();) {
     PlaybackSession& session = it->second;
     if (!session.sink) {
-      if (session.paused) {
+      if (session.paused || dynamic_cast<ProgressivePlaybackDevice*>(session.buffer)) {
         ++it;
         continue;
       }
@@ -6105,9 +6241,12 @@ void MainWindow::refreshPlaybackHandles() {
     const qint64 bytesConsumed = session.buffer
         ? (session.pcmData.size() - std::max<qint64>(0, session.buffer->bytesAvailable()))
         : 0;
-    const int framesConsumed = bytesPerFrame > 0
+    int framesConsumed = bytesPerFrame > 0
         ? static_cast<int>(std::clamp<qint64>(bytesConsumed / bytesPerFrame, 0, session.totalFrames))
         : 0;
+    if (auto* reader = dynamic_cast<ProgressivePlaybackDevice*>(session.buffer))
+      framesConsumed = reader->consumed.load();
+    updatePlaybackStats(session);
     int completedSegments = 0;
     while (completedSegments < static_cast<int>(session.segmentEndFrames.size()) &&
            framesConsumed >= session.segmentEndFrames[static_cast<size_t>(completedSegments)]) {
@@ -6122,10 +6261,25 @@ void MainWindow::refreshPlaybackHandles() {
                                        {{"repeat_left", static_cast<double>(repeatLeft)},
                                         {"prog", std::clamp(prog, 0.0, 100.0)}});
 
+    if (session.sink->state() == QAudio::IdleState) {
+      if (auto* reader = dynamic_cast<ProgressivePlaybackDevice*>(session.buffer); reader && !reader->atEnd()) {
+        // An idle device can request more audio when a sequential source
+        // signals readiness. Source starvation itself is handled in readData.
+        emit reader->readyRead();
+        ++it;
+        continue;
+      }
+    }
     if (session.sink->state() == QAudio::IdleState || session.sink->state() == QAudio::StoppedState) {
       QAudioSink* finishedSink = session.sink;
-      QBuffer* finishedBuffer = session.buffer;
-      engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", 100.0}});
+      QIODevice* finishedBuffer = session.buffer;
+      const bool failed = finishedSink->state() == QAudio::StoppedState && finishedSink->error() != QAudio::NoError;
+      if (failed) {
+        commandBox_->appendAsyncOutput(QStringLiteral("Playback stopped with audio output error %1.")
+                                           .arg(static_cast<int>(finishedSink->error())));
+      }
+      engine_.updateRuntimeHandleMembers(session.handleId, {{"repeat_left", 0.0}, {"prog", failed ? prog : 100.0},
+                                                            {"active", 0.0}, {"paused", 0.0}});
       session.sink = nullptr;
       session.buffer = nullptr;
       anyFinished = true;
@@ -6145,6 +6299,7 @@ void MainWindow::refreshPlaybackHandles() {
   if (anyFinished) {
     refreshVariables();
   }
+  emit runtimeHandleMembersChanged();
 }
 
 void MainWindow::openStructMembersForPath(const QString& path) {
@@ -6171,6 +6326,15 @@ void MainWindow::openStructMembersForPath(const QString& path) {
   connect(w, &StructMembersWindow::requestOpenGraph, this, &MainWindow::openSignalGraphForPath);
   connect(w, &StructMembersWindow::requestPlayAudio, this, &MainWindow::playAudioForPath);
   connect(w, &StructMembersWindow::requestOpenDetail, this, &MainWindow::openPathDetailDeferred);
+  const auto type = engine_.getValueType(path.toStdString());
+  if (type && (*type & kDisplayTypebitHandle)) {
+    connect(this, &MainWindow::runtimeHandleMembersChanged, w,
+            [owner = QPointer<MainWindow>(this), w, scope = engine_.activeContext()] {
+              if (owner && scope == owner->engine_.activeContext()) {
+                w->setMembers(owner->engine_.listStructMembers(w->structPath().toStdString()));
+              }
+            }, Qt::QueuedConnection);
+  }
   trackWindow(path, w, WindowKind::Text);
   w->show();
 }
@@ -6553,7 +6717,9 @@ std::optional<std::vector<std::uint64_t>> MainWindow::graphicsHandlePathIds(cons
           if (rounded <= 0 || std::fabs(value - rounded) > 1e-9) {
             return std::nullopt;
           }
-          ids.push_back(static_cast<std::uint64_t>(rounded));
+          const auto id = static_cast<std::uint64_t>(rounded);
+          if (!graphWindowForHandle(id)) return std::nullopt;
+          ids.push_back(id);
         }
         return ids;
       }
@@ -6822,10 +6988,8 @@ void MainWindow::focusWindow(QWidget* window) const {
 
 void MainWindow::reconcileScopedWindows() {
   graphicsManager_.reconcile();
-  std::unordered_set<std::string> activeNames;
-  for (const auto& v : engine_.listVariables()) {
-    activeNames.insert(v.name);
-  }
+  const auto names = engine_.variableNames();
+  std::unordered_set<std::string> activeNames(names.begin(), names.end());
 
   const auto currentScope = engine_.activeContext();
   for (auto it = scopedWindows_.begin(); it != scopedWindows_.end();) {
@@ -6881,6 +7045,7 @@ void MainWindow::reconcileScopedWindows() {
 
     ++it;
   }
+  emit runtimeHandleMembersChanged();
 }
 
 std::vector<QWidget*> MainWindow::focusableScopedWindows(std::optional<WindowKind> kind) const {

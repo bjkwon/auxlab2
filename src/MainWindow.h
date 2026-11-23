@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QVector>
 #include <array>
+#include <chrono>
 #include <deque>
 #include <map>
 #include <memory>
@@ -73,6 +74,9 @@ public:
                    auxRecordResult& result,
                    std::string& err);
 
+signals:
+  void runtimeHandleMembersChanged();
+
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
@@ -96,6 +100,7 @@ private:
     QString label;
     QStringList userVars;
     QStringList checkpointVars;
+    QString destination;  // Empty for full workspace checkpoints.
   };
 
   void buildUi();
@@ -123,7 +128,7 @@ private:
   bool shouldCreateObjectUndoCheckpoint(const QString& cmd) const;
   bool isReservedUndoVariable(const QString& varName) const;
   QStringList userVariableNames() const;
-  ObjectUndoCheckpoint captureObjectUndoCheckpoint(const QString& label);
+  ObjectUndoCheckpoint captureObjectUndoCheckpoint(const QString& label, const QString& destination = {});
   void cleanupObjectUndoCheckpoint(const ObjectUndoCheckpoint& checkpoint);
   void pruneObjectUndoStack();
   void clearRedoObjectUndoStack();
@@ -284,10 +289,16 @@ private:
   QBuffer* varAudioBuffer_ = nullptr;
   QByteArray varPcmData_;
 
+  struct ProgressivePlot {
+    QPointer<SignalGraphWindow> window;
+    std::shared_ptr<const auxProgressiveAudio> source;
+    size_t displayed = 0;
+  };
+  std::map<std::uint64_t, ProgressivePlot> progressivePlots_;
   struct PlaybackSession {
     std::uint64_t handleId = 0;
     QAudioSink* sink = nullptr;
-    QBuffer* buffer = nullptr;
+    QIODevice* buffer = nullptr;
     QByteArray pcmData;
     int sampleRate = 0;
     int channelCount = 0;
@@ -297,8 +308,13 @@ private:
     std::vector<int> segmentEndFrames;
     qint64 pausedBytes = 0;
     bool paused = false;
+    bool deviceStarved = false;
+    int deviceUnderflows = 0;
+    std::chrono::steady_clock::time_point deviceStarvedSince;
+    double deviceStarvedMs = 0;
   };
-
+  void openPlaybackSink(PlaybackSession& session);
+  void updatePlaybackStats(PlaybackSession& session);
   std::map<std::uint64_t, PlaybackSession> playbackSessions_;
 
   struct RecordingSession {

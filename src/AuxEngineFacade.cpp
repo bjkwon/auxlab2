@@ -1,3 +1,4 @@
+#include <QRegularExpression>
 #include "AuxEngineFacade.h"
 
 #include <algorithm>
@@ -426,42 +427,20 @@ AuxObj resolveObjByPath(auxContext*& ctx, const std::string& path, const auxConf
   return binding.obj();
 }
 
-std::string formatRmsDb(const AuxObj& obj) {
-  const int channels = aux_num_channels(obj);
-  if (channels <= 0) {
-    return "";
-  }
-
+std::string formatChannelRms(long double sumSquares, size_t length) {
+  if (length == 0) return "inf";
+  if (sumSquares <= 0) return "-inf";
+  const double mean = static_cast<double>(sumSquares / length);
   std::ostringstream out;
-  bool first = true;
-  for (int ch = 0; ch < channels; ++ch) {
-    const size_t len = aux_flatten_channel_length(obj, ch);
-    if (!first) {
-      out << ", ";
-    }
-    first = false;
-
-    if (len == 0) {
-      out << "inf";
-      continue;
-    }
-
-    std::vector<double> samples(len, 0.0);
-    aux_flatten_channel(obj, ch, samples.data(), samples.size());
-
-    long double sumSq = 0.0;
-    for (double v : samples) {
-      sumSq += static_cast<long double>(v) * static_cast<long double>(v);
-    }
-    const long double mean = sumSq / static_cast<long double>(len);
-    if (mean <= 0.0) {
-      out << "-inf";
-      continue;
-    }
-    const double rmsDb = 20.0 * std::log10(std::sqrt(static_cast<double>(mean))) + kRmsDbOffset;
-    out << std::fixed << std::setprecision(1) << rmsDb;
-  }
+  out << std::fixed << std::setprecision(1) << 10.0 * std::log10(mean) + kRmsDbOffset;
   return out.str();
+}
+
+long double sumSquares(const double* samples, size_t count, long double sum = 0) {
+  for (size_t i = 0; i < count; ++i) {
+    sum += static_cast<long double>(samples[i]) * samples[i];
+  }
+  return sum;
 }
 
 }  // namespace
@@ -476,18 +455,48 @@ std::string AuxEngineFacade::cachedRmsForObj(const AuxObj& obj) const {
     lengths[static_cast<size_t>(ch)] = aux_flatten_channel_length(obj, ch);
   }
 
-  auto it = rmsCache_.find(obj);
-  if (it != rmsCache_.end() && it->second.first == lengths) {
-    return it->second.second;
-  }
+  auto& entry = rmsCache_[obj];
+  if (entry.lengths == lengths) return entry.display;
 
-  std::string rms = formatRmsDb(obj);
-  rmsCache_[obj] = {std::move(lengths), rms};
-  return rms;
+  std::ostringstream display;
+  AuxSignal prefix{};
+  if (aux_progressive_audio(obj) && aux_get_segment(obj, 0, 0, prefix) && prefix.nSamples == lengths.front()) {
+    const size_t previous = entry.lengths.empty() ? 0 : entry.lengths.front();
+    const size_t begin = previous <= lengths.front() ? previous : 0;
+    entry.sumSquares = sumSquares(prefix.buf + begin, lengths.front() - begin,
+                                  begin ? entry.sumSquares : 0);
+    display << formatChannelRms(entry.sumSquares, lengths.front());
+  } else {
+    for (int ch = 0; ch < channels; ++ch) {
+      long double sum = 0;
+      AuxSignal seg{};
+      for (int i = 0; aux_get_segment(obj, ch, i, seg); ++i) {
+        sum = sumSquares(seg.buf, seg.nSamples, sum);
+      }
+      if (ch) display << ", ";
+      display << formatChannelRms(sum, lengths[ch]);
+    }
+  }
+  entry.lengths = std::move(lengths);
+  entry.display = display.str();
+  return entry.display;
 }
 
 void AuxEngineFacade::clearValueCaches() const {
   rmsCache_.clear();
+  signalDataCache_.clear();
+}
+
+void AuxEngineFacade::retainWorkspaceRms(AuxObj exclude) const {
+  std::set<AuxObj> workspaceAudio;
+  for (const auto& name : variableNames()) {
+    const auto obj = aux_get_var(activeCtx_, name);
+    if (obj && obj != exclude && aux_is_audio(obj)) workspaceAudio.insert(obj);
+  }
+  for (auto it = rmsCache_.begin(); it != rmsCache_.end();) {
+    if (workspaceAudio.count(it->first)) ++it;
+    else it = rmsCache_.erase(it);
+  }
   signalDataCache_.clear();
 }
 
@@ -509,7 +518,7 @@ bool commandMayMutateValues(const std::string& command) {
       }
       continue;
     }
-    if (ch == '<' && i + 1 < command.size() && command[i + 1] == '-') {
+    if (ch == '<' && i + 1 < command.size() && (command[i + 1] == '-' || command[i + 1] == '~')) {
       return true;
     }
     if (ch != '=') {
@@ -715,7 +724,15 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
     captured = filterCapturedNoise(cap.output());
   }
   if (out.status == static_cast<int>(auxEvalStatus::AUX_EVAL_OK) && commandMayMutateValues(command)) {
-    clearValueCaches();
+    auto dest = playAssignmentDestination(command);
+    if (dest.isEmpty()) {
+      // A filter with only named inputs can only replace its destination.
+      static const QRegularExpression namedFilter(
+          R"(^\s*([A-Za-z_]\w*)\s*<~\s*[A-Za-z_]\w*\.filt\s*\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*){0,2}\s*\)\s*;?\s*$)");
+      dest = namedFilter.match(QString::fromStdString(command)).captured(1);
+    }
+    if (dest.isEmpty()) clearValueCaches();
+    else retainWorkspaceRms(aux_get_var(activeCtx_, dest.toStdString()));
   }
 
   out.output = captured;
@@ -747,17 +764,59 @@ int AuxEngineFacade::pollAsync() {
   if (!activeCtx_ && !rootCtx_) {
     return 0;
   }
-  int changed = 0;
-  if (activeCtx_) {
-    changed += aux_poll_async(activeCtx_);
-  }
+  bool activeFiltersOnly = true;
+  bool rootFiltersOnly = true;
+  int changed = activeCtx_ ? aux_poll_async(activeCtx_, activeFiltersOnly) : 0;
   if (rootCtx_ && rootCtx_ != activeCtx_) {
-    changed += aux_poll_async(rootCtx_);
+    changed += aux_poll_async(rootCtx_, rootFiltersOnly);
   }
-  if (changed > 0) {
+  if (changed && activeFiltersOnly && rootFiltersOnly) {
+    // Progress only appends samples to workspace audio. Keep its accumulated
+    // RMS, but invalidate snapshots of handle members such as y.h.block.
+    retainWorkspaceRms();
+  } else if (changed) {
     clearValueCaches();
   }
   return changed;
+}
+
+QString AuxEngineFacade::playAssignmentDestination(const std::string& command) {
+  static const QRegularExpression play(R"(^\s*([A-Za-z_]\w*)\s*=\s*play\s*\(\s*[A-Za-z_]\w*\s*\)\s*;?\s*$)");
+  return play.match(QString::fromStdString(command)).captured(1);
+}
+
+std::vector<std::string> AuxEngineFacade::variableNames() const {
+  return aux_enum_vars(activeCtx_);
+}
+
+SignalDataPtr AuxEngineFacade::getAudioLayout(const std::string& name) const {
+  auto obj = aux_get_var(activeCtx_, name);
+  if (!obj || !aux_is_audio(obj)) return {};
+  auto data = std::make_shared<SignalData>();
+  data->isAudio = true;
+  data->channels.resize(aux_num_channels(obj));
+  double origin = std::numeric_limits<double>::infinity();
+  AuxSignal seg{};
+  for (int ch = 0; ch < static_cast<int>(data->channels.size()); ++ch) {
+    for (int i = 0; aux_get_segment(obj, ch, i, seg); ++i) {
+      origin = std::min(origin, seg.tmark);
+      if (seg.fs > 0) data->sampleRate = seg.fs;
+    }
+  }
+  if (!std::isfinite(origin) || data->sampleRate <= 0) return {};
+  data->startTimeSec = origin / 1000.0;
+  for (int ch = 0; ch < static_cast<int>(data->channels.size()); ++ch) {
+    auto& segments = data->channels[ch].segments;
+    for (int i = 0; aux_get_segment(obj, ch, i, seg); ++i) {
+      if (!seg.nSamples) continue;
+      const int start = static_cast<int>(std::llround((seg.tmark - origin) * data->sampleRate / 1000.0));
+      segments.push_back({start, static_cast<int>(seg.nSamples)});
+    }
+    std::sort(segments.begin(), segments.end(), [](const auto& left, const auto& right) {
+      return left.startSample < right.startSample;
+    });
+  }
+  return data;
 }
 
 std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
@@ -773,6 +832,7 @@ std::vector<VarSnapshot> AuxEngineFacade::listVariables() const {
   auto names = aux_enum_vars(ctx);
   vars.reserve(names.size());
   for (const auto& name : names) {
+    if (name.rfind("__auxlab2_undo_", 0) == 0) continue;
     auto obj = aux_get_var(ctx, name);
     if (!obj) {
       continue;
@@ -909,6 +969,8 @@ SignalDataPtr AuxEngineFacade::getSignalData(const std::string& varName) const {
     }
   }
 
+  // Members of live handles can change in place without changing shape.
+  if (obj != aux_get_var(ctx, varName)) return buildSignalDataFromAuxObj(obj, aux_get_fs(ctx));
   auto it = signalDataCache_.find(obj);
   if (it != signalDataCache_.end() && it->second.first == lengths) {
     return it->second.second;
@@ -1361,7 +1423,7 @@ bool AuxEngineFacade::copyVar(const std::string& fromName, const std::string& to
   if (aux_eval(&activeCtx_, expr, cfg_, preview) != static_cast<int>(auxEvalStatus::AUX_EVAL_OK)) {
     return false;
   }
-  clearValueCaches();
+  retainWorkspaceRms(aux_get_var(activeCtx_, toName));
   return true;
 }
 
@@ -1387,9 +1449,7 @@ bool AuxEngineFacade::updateRuntimeHandleMembers(std::uint64_t handleId, const s
   if (rootCtx_ && rootCtx_ != activeCtx_ && aux_update_runtime_handle_members(rootCtx_, handleId, members) == 0) {
     updated = true;
   }
-  if (updated) {
-    clearValueCaches();
-  }
+  // Scalar status updates do not change the backing audio samples.
   return updated;
 }
 
@@ -1439,9 +1499,7 @@ bool AuxEngineFacade::attachRecordCallbackOutputsToHandle(std::uint64_t sessionI
       aux_attach_record_callback_outputs_to_handle(rootCtx_, sessionId, handleId) == 0) {
     updated = true;
   }
-  if (updated) {
-    clearValueCaches();
-  }
+  if (updated) clearValueCaches();
   return updated;
 }
 

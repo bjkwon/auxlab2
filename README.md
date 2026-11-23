@@ -299,3 +299,31 @@ History file:
 - Graph/table windows are tracked per workspace scope.
 - During UDF child-scope debugging, windows from other scope are deactivated.
 - Windows are closed when their variable is removed from active scope.
+
+### Progressive filtering, plotting, and playback
+
+Paste these lines into the auxlab2 console. Submit the second line as one command to attach both consumers immediately. The rate at which the graph grows depends on the signal length and filter cost.
+
+```text
+x = tone(330,8000)@-30
+y <~ x.filt(ones(512)/512); plot(y); h=y.play
+y.h.status
+h.underflow_count
+h.underflow_duration
+```
+
+Progressive `filt` accepts contiguous real mono audio and real vectors. It carries filter state between blocks and uses row boundaries on grouped input. The result retains its available samples. An ordinary assignment such as `s=y` takes a snapshot. Use `y.h.block` for the latest published block, `y.h.completed` for the sample count, and `stop(y.h)` to cancel. A linked plot redraws the latest prefix. Playback reads from the beginning, inserts silence during shortages, and resumes at the first unplayed sample.
+
+On the playback handle, `underflow_count` counts source starvation episodes and observed Qt device underruns, and `underflow_duration` is in milliseconds. For a progressive source, `underflow_blocks` counts read requests containing inserted silence out of `blocks_requested`. `source_underflow_count` counts distinct source shortages. Statistics remain accessible after playback ends.
+
+The block UDF example in `examples/progressive` accepts either complete or progressive input. Change to that directory using the console's `#cd` command (or add it to the UDF search path), then run
+
+```text
+x = tone(440,2000)
+y <~ x.filt([0.5 0.5]); ev <~ progblocks(y,10,"detect_loud_blocks",[0.5 0.5],-20)
+ev.h.status
+ev.times
+ev.levels
+```
+
+Use `x` in place of `y` to run the same detector on complete input. The callback filters each window with carried state and stores the sample-derived start time in milliseconds and AUX RMS in dB for each window strictly above the threshold. Windows start from the beginning even when the consumer attaches late. The last partial window is evaluated at its actual length. Callback failures are reported in `ev.h.error`.

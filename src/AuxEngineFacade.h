@@ -84,7 +84,13 @@ public:
   void clearPlaybackBackend();
   EvalResult eval(const std::string& command);
   int pollAsync();
+  std::shared_ptr<const auxProgressiveAudio> progressiveAudio(const std::string& name) const {
+    return aux_progressive_audio(aux_get_var(activeCtx_, name));
+  }
 
+  static QString playAssignmentDestination(const std::string& command);
+  std::vector<std::string> variableNames() const;
+  SignalDataPtr getAudioLayout(const std::string& name) const;
   std::vector<VarSnapshot> listVariables() const;
   std::vector<VarSnapshot> listStructMembers(const std::string& path) const;
   std::vector<VarSnapshot> listCellMembers(const std::string& path) const;
@@ -134,6 +140,7 @@ public:
 
 private:
   void clearValueCaches() const;
+  void retainWorkspaceRms(AuxObj exclude = nullptr) const;
   std::string cachedRmsForObj(const AuxObj& obj) const;
 
   auxConfig cfg_{};
@@ -146,7 +153,12 @@ private:
   // samples on every call. A per-channel length mismatch (reassignment,
   // in-place edit that changes length) forces recomputation for that
   // object; entries for since-deleted objects just go unused.
-  mutable std::map<AuxObj, std::pair<std::vector<size_t>, std::string>> rmsCache_;
+  struct RmsCacheEntry {
+    std::vector<size_t> lengths;
+    std::string display;
+    long double sumSquares = 0;  // Published prefix for a progressive mono source.
+  };
+  mutable std::map<AuxObj, RmsCacheEntry> rmsCache_;
   // Same idea as rmsCache_, but for the built SignalData snapshot itself.
   // The key includes flattened lengths and first-segment shape metadata so
   // same-length matrix reshapes still refresh the table/plot snapshot.

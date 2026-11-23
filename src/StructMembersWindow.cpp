@@ -26,14 +26,7 @@ StructMembersWindow::StructMembersWindow(const QString& structPath, const std::v
   tree_->installEventFilter(this);
   layout->addWidget(tree_);
 
-  for (const auto& m : members) {
-    auto* item = new QTreeWidgetItem(tree_);
-    item->setText(0, QString::fromStdString(m.name));
-    item->setText(1, m.isAudio ? QString::fromStdString(m.rms) : QString::fromStdString(m.typeTag));
-    item->setText(2, QString::fromStdString(m.size));
-    item->setText(3, QString::fromStdString(m.preview));
-    item->setData(0, kPathRole, QString("%1.%2").arg(structPath_, QString::fromStdString(m.name)));
-  }
+  setMembers(members);
 
   connect(tree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem*, int) {
     const auto path = selectedFullPath();
@@ -41,6 +34,24 @@ StructMembersWindow::StructMembersWindow(const QString& structPath, const std::v
       emit requestOpenDetail(path);
     }
   });
+}
+
+void StructMembersWindow::setMembers(const std::vector<VarSnapshot>& members) {
+  // Keep the existing rows while counters change so selection and scrolling
+  // continue to work during playback.
+  int row = 0;
+  for (const auto& m : members) {
+    auto* item = tree_->topLevelItem(row++);
+    if (!item) item = new QTreeWidgetItem(tree_);
+    item->setText(0, QString::fromStdString(m.name));
+    item->setText(1, m.isAudio ? QString::fromStdString(m.rms) : QString::fromStdString(m.typeTag));
+    item->setText(2, QString::fromStdString(m.size));
+    item->setText(3, QString::fromStdString(m.preview));
+    item->setData(0, kPathRole, QString("%1.%2").arg(structPath_, QString::fromStdString(m.name)));
+  }
+  while (tree_->topLevelItemCount() > row) {
+    delete tree_->takeTopLevelItem(tree_->topLevelItemCount() - 1);
+  }
 }
 
 QString StructMembersWindow::structPath() const {
