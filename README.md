@@ -1,378 +1,123 @@
-# auxlab2
+# AUXLAB2
 
-Qt-based GUI application built on top of `auxe` (AUX Engine).
+AUXLAB2 is a desktop workbench for writing and debugging AUX scripts, exploring waveforms, and experimenting with audio signal processing.
 
-## Features
+## AUX, AUXLAB, and AUXLAB2
 
-- Main command console with persistent `AUX> ` prompt
-  - `#` lines run OS shell commands (`#pwd`, `#cd`, `#ls`, ...); see [Shell Commands](#shell-commands-)
-- Variable box showing workspace variables (`name`, `type`, `preview`)
-- History box with persistent history file
-- UDF debug window (step over/in/out, continue, abort)
-- Signal graph windows (multiple)
-  - graph tabs can be detached into independent windows and docked back into the main window
-- Signal table windows (multiple)
+### AUX
 
-## Workspace Layout
+AUX (AUdio syntaX) is a scripting language for audio signal processing with MATLAB-like syntax. It supports numeric vectors and matrices as well as audio objects that carry their sample rate, channel layout, and timing. You can generate, filter, and combine signals and work with audio in units such as milliseconds. The AUX Engine (`auxe`) parses and runs the language. [AUX Engine repository](https://github.com/bjkwon/aux_engine)
 
-`auxlab2` is intended to live as a sibling of `aux_engine`:
+### AUXLAB (legacy)
 
-- `/Users/bkwon/dev/aux_engine`
-- `/Users/bkwon/dev/auxlab2`
+AUXLAB is the original Windows application for AUX. Its MATLAB-inspired interface combines an interactive command window with tools for generating, viewing, processing, and playing audio signals. [Legacy AUXLAB repository](https://github.com/bjkwon/auxlab)
 
-The CMake project links to `aux_engine` via:
+### AUXLAB2
 
-- `add_subdirectory(../aux_engine ...)`
+AUXLAB2 is the Qt 6 workbench for AUX on macOS, Linux, and Windows. It embeds the AUX Engine and includes the following tools.
 
-## Requirements (macOS/Homebrew)
+- An `AUX>` console with persistent command history and a workspace variable browser.
+- Waveform plots and signal tables, with zoom, pan, and time-range selection in plots.
+- Audio playback and recording, including playback of a selected waveform range.
+- A debugger for user-defined functions (UDFs) with breakpoints, step controls, and local variable inspection.
 
-- `cmake`
-- Qt 6 (`qt`)
-- `fftw`
-- `libsamplerate`
-- `nlohmann-json`
+## Requirements
 
-Example install:
+- CMake 3.21 or newer and a C++17 compiler.
+- Qt 6.5 or newer with the Widgets and Multimedia modules. The recording code uses Qt's microphone permission API. [Qt microphone permission API](https://doc.qt.io/qt-6/qmicrophonepermission.html)
+- FFTW3, libsamplerate, and nlohmann-json development packages. Install a nlohmann-json package that provides CMake configuration files.
+- Git to clone the source repositories.
 
-```bash
+Playback requires an audio output device. Recording requires an audio input device and microphone access where the operating system prompts for it.
+
+## Build and run
+
+Clone both repositories into the same parent directory. Keep the checkout named `aux_engine` next to `auxlab2` so CMake can build the engine from that sibling source tree.
+
+```sh
+git clone https://github.com/bjkwon/aux_engine.git
+git clone https://github.com/bjkwon/auxlab2.git
+cd auxlab2
+```
+
+Run the commands for your platform from the `auxlab2` directory.
+
+### macOS with Homebrew
+
+Install the Xcode Command Line Tools with `xcode-select --install` if needed, then install the dependencies. [Homebrew Qt formula](https://formulae.brew.sh/formula/qt)
+
+```sh
 brew install cmake qt fftw libsamplerate nlohmann-json
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix fftw);$(brew --prefix libsamplerate);$(brew --prefix nlohmann-json)" \
+  -DCMAKE_CXX_FLAGS="-I\"$(brew --prefix fftw)/include\""
+cmake --build build --config Release --parallel --target auxlab2
+./build/auxlab2
 ```
 
-## Build
+The compiler flag exposes Homebrew's `fftw3.h` to the AUX Engine build. You can also open `build/auxlab2.app` from Finder.
 
-```bash
-cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build \
-  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qt;/opt/homebrew/opt/fftw;/opt/homebrew/opt/libsamplerate"
+### Linux
 
-cmake --build /Users/bkwon/dev/auxlab2/build -j
+Install the development packages for your distribution. The example below uses Ubuntu 26.04. [Ubuntu Qt Multimedia package](https://packages.ubuntu.com/resolute/qt6-multimedia-dev)
+
+```sh
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev \
+  libfftw3-dev libsamplerate0-dev nlohmann-json3-dev
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --parallel --target auxlab2
+./build/auxlab2
 ```
 
-## Run
+If you installed Qt separately, pass `-DCMAKE_PREFIX_PATH=/path/to/qt` when configuring.
 
-```bash
-/Users/bkwon/dev/auxlab2/build/auxlab2
+### Windows with Visual Studio and vcpkg
+
+Install Visual Studio 2022 with **Desktop development with C++**, CMake, and a 64-bit Qt 6 build for MSVC 2022 with Qt Multimedia. Install and bootstrap vcpkg, set `VCPKG_ROOT` to its directory, then run the commands in Developer PowerShell for Visual Studio. Set `$qtPrefix` to your Qt kit directory. [Qt deployment on Windows](https://doc.qt.io/qt-6/windows-deployment.html)
+
+```powershell
+$qtPrefix = 'C:\Qt\6.10.1\msvc2022_64'
+$env:Path = "$qtPrefix\bin;$env:Path"
+& "$env:VCPKG_ROOT\vcpkg.exe" install fftw3:x64-windows libsamplerate:x64-windows nlohmann-json:x64-windows
+
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  "-DCMAKE_PREFIX_PATH=$qtPrefix" `
+  "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build --config Release --parallel --target auxlab2
+& "$qtPrefix\bin\windeployqt.exe" --release .\build\Release\auxlab2.exe
+& .\build\Release\auxlab2.exe
 ```
 
-## App Icon (macOS)
+For installers, archives, and distribution builds, see the [release and packaging guide](RELEASE.md).
 
-To produce a Finder-launchable `.app` with a custom icon:
+## Try it
 
-1. Prepare a square PNG (recommended `1024x1024`).
-2. Generate the icon file:
-
-```bash
-/Users/bkwon/dev/auxlab2/scripts/make_icns.sh /absolute/path/to/icon-1024.png
-```
-
-This writes:
-
-- `/Users/bkwon/dev/auxlab2/resources/icons/auxlab2.icns`
-
-3. Reconfigure/build:
-
-```bash
-cmake -S /Users/bkwon/dev/auxlab2 -B /Users/bkwon/dev/auxlab2/build
-cmake --build /Users/bkwon/dev/auxlab2/build -j
-```
-
-4. Launch by double-clicking:
-
-- `/Users/bkwon/dev/auxlab2/build/auxlab2.app`
-
-## UI Behavior Summary
-
-### Command Console
-
-- Editable only at the last input line
-- Immutable colored prompt: `AUX> `
-- `Enter`: execute command
-- `Up/Down`: history navigation
-- `Ctrl+R`: reverse history search
-- `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, `Ctrl+P`, `Ctrl+N`: readline-style keys (platform behavior may vary)
-
-### Console Method Syntax
-
-The console accepts method-style forms on a variable or handle and rewrites them to
-the equivalent AUX function call before evaluation. Both the bare form and the
-empty-parentheses form are accepted and behave identically.
-
-Playback / recording handles:
-
-| Method form | Rewritten as |
-| --- | --- |
-| `x.play` / `x.play()` | `play(x)` |
-| `x.play(0~1)` | `play(x, 0~1)` |
-| `h.stop` / `h.stop()` | `stop(h)` |
-| `h.pause` / `h.pause()` | `pause(h)` |
-| `h.resume` / `h.resume()` | `resume(h)` |
-| `h.delete` / `h.delete()` | `delete(h)` |
-
-To stream a local file or an HTTP(S) audio URL in auxlab2, pass its location directly.
+Enter these commands at the `AUX>` prompt to create a two-second tone glide from 300 Hz to 600 Hz, with a smoothed onset and offset, scaled to -20 dB relative to full scale. Then plot and play it.
 
 ```aux
-p = streamplay("very-long-file.wav")
-pause(p)
-resume(p)
-stop(p)
+x = tone([300 600], 2s).ramp(50) @-20
+plot(x)
+play(x)
 ```
 
-The handle tracks playback while Qt reads and decodes the source. AUX does not
-retain the samples. Relative paths use the current working directory. Use a
-direct media URL for remote audio, including a presigned HTTPS URL for S3.
-Supported formats depend on the installed Qt media backend. On macOS, serve
-remote WAV files with HTTP byte-range support. Network and decoding errors
-appear in the console and clear the handle's active flag.
+Better yet, in the "Audio Objects" list, click the "x" row and press Enter to plot the waveform. Once it is plotted, press the spacebar to play it.
 
-Graphics handles:
+![AUXLAB2 workspace and waveform plot](docs/images/auxlab2-shot1.png)
 
-| Method form | Rewritten as |
-| --- | --- |
-| `f.axes` / `f.axes()` | `axes(f)` |
-| `ax.plot` | `plot(ax)` |
-| `ax.plot(v)` / `ax.plot(v,"b+")` | `plot(ax, v)` / `plot(ax, v,"b+")` |
-| `ax.line(v)` / `ax.line(x,y)` | `line(ax, v)` / `line(ax, x,y)` |
-| `ax.text(...)` | `text(ax, ...)` |
-| `h.delete` / `h.delete()` | `delete(h)` |
-
-Two details worth knowing:
-
-- Rewriting is name-based only. Identifiers that merely start with a method name
-  (`x.stopped`, `x.playback`) are left untouched.
-- The playback/recording forms are rewritten anywhere in the command line, while the
-  graphics forms are recognized only when the method call is the whole command
-  (optionally with an assignment target, e.g. `ln=ax.line(x,y)`).
-
-### Shell Commands (`#`)
-
-A console line whose first non-space character is `#` runs as an OS shell command.
-This is an auxlab2 console feature only. It does not apply to `.aux` script files,
-UDFs, or `/` debugger commands, and `#` elsewhere in a line is still the AUX
-`pitchscale` operator (`y = x # 1.5`).
-
-- Everything after `#` goes to the shell exactly as typed, including `;`, `,`, `|` and `&&`.
-- Output (stdout and stderr) appears in the console as it arrives. A non-zero exit
-  status is reported as `(exit code N)`.
-- Input is blocked while a command runs. Press `Ctrl+C` to stop it; on macOS that is the
-  physical Control key (`Cmd+C` still copies). A second `Ctrl+C`, or a command that
-  ignores the first one for 2 seconds, is force-killed.
-- The command gets no input (stdin is closed), so interactive programs such as
-  `python`, `vim` or `top` end immediately or misbehave. Run those in a terminal.
-- `#pwd` shows the working directory.
-- `#cd <dir>` changes auxlab2's working directory. It accepts relative paths, `~`,
-  `~/...`, `-` (previous directory), and a quoted path; `#cd` alone goes home. The new
-  directory is used for relative file paths (`wave("a.wav")`, `dir`, ...) and UDF lookup.
-  Cached UDFs that were found through the old directory, or that a same-named file in
-  the new directory now overrides, are looked up again on their next call. UDFs open in
-  the debug window keep their breakpoints. `#cd` is refused while the debugger is paused.
-- A `cd` combined with shell syntax (`#cd build && make`, `#cd $HOME`) runs in the shell
-  and does **not** change auxlab2's directory.
-
-A multi-line submission (pasted, or entered with `Shift+Enter`) can mix `#` lines and
-AUX code. It runs top to bottom: each `#` line on its own, and the AUX lines between them
-as one chunk, exactly as if submitted alone. Execution stops at the first failure (a
-non-zero exit, `Ctrl+C`, an AUX error, or a debugger pause), and the rest is reported as
-skipped. A `#` line inside an AUX block (`if`/`for`/`while`/`switch`/`try`/`function` …
-`end`) or inside an open bracket is rejected before anything runs. The whole
-submission is saved as one history item.
-
-```
-#cd ~/sounds/experiment1
-x = wave("tone440.wav");
-y = x # 1.5;
-#ls -l
-```
-
-Limitations:
-
-- **Environment when launched from Finder/Dock (macOS).** GUI apps do not read your shell
-  profile, so `PATH` is minimal (`/usr/bin:/bin:/usr/sbin:/sbin`). Tools installed by
-  Homebrew (`/opt/homebrew/bin`) or set up in `.zshrc` may be "not found". Use full paths
-  (`#/opt/homebrew/bin/ffmpeg ...`) or start auxlab2 from a terminal. The starting working
-  directory is also `/` in that case. Check with `#pwd` and `#cd` where you need to be.
-- **Shell differs by platform.** macOS/Linux use `/bin/sh -c`, Windows uses `cmd.exe /c`,
-  so commands, quoting and built-ins differ (`ls` vs `dir`, `'...'` vs `"..."`). Shell
-  lines saved in history are not portable between platforms. On Windows, `Ctrl+C` ends
-  `cmd.exe` but may not stop programs it started. `#cd` follows the rules above on all
-  platforms (`#cd` alone goes home; `cd /d` is accepted).
-
-### UDF Lookup and Reloading
-
-A UDF is called by name (`y = concat_lr(indir, "out.wav")`), not by file path. On the
-first call, auxe looks for `concat_lr.aux` in the current working directory, then in
-each UDF search path in order. The first file found is loaded and cached for the rest
-of the session.
-
-- To make a UDF folder available in every session, add it under
-  `Settings > View Runtime Settings > UDF Paths (one per line)`. The paths are saved and
-  reloaded on startup, and UDFs found through them stay cached across `#cd`.
-- A same-named `.aux` file in the current directory takes priority over one on a UDF path.
-
-**Editing a cached UDF does not reload it automatically.** auxe does not check whether
-the file has changed, so later calls keep running the version loaded first. The only
-exception is the UDF open in the debug window (`File > Open UDF...`): auxlab2 reloads it
-when it is saved and before each console command if the file is newer. To pick up edits
-to another UDF:
-
-- open it with `File > Open UDF...` (recommended while editing; later saves are then
-  picked up automatically),
-- if it was found through the current directory, `#cd` elsewhere and back, which makes
-  it be looked up again, or
-- restart auxlab2.
-
-`clear` removes variables only; it does not unload a UDF.
-
-### External Modules
-
-External native modules (compiled C/C++ libraries) are an `auxe` feature, so they work
-the same in auxlab2 as in any other host. Import a module before calling its functions,
-then call them through the module name or an alias:
-
-```
-import("wsola")
-y = wsola::wsola_timestretch(x, 1.5)
-
-import("wsola", "ws")
-y = x.ws::wsola_timestretch(1.5)
-```
-
-- Module functions are not global builtins: `wsola_timestretch(x, 1.5)` fails even after
-  the import. Always use the `module::` (or `alias::`) prefix.
-- `import` looks for a folder named after the module in each directory listed in
-  `AUXE_MODULE_PATH`, then in `~/.auxe/modules` (macOS/Linux) or
-  `%LOCALAPPDATA%\auxe\modules` (Windows).
-- When auxlab2 is launched from Finder/Dock on macOS, it does not see environment
-  variables set in your shell profile, so `AUXE_MODULE_PATH` may be missing. Install
-  modules under `~/.auxe/modules`, or start auxlab2 from a terminal.
-
-For the module folder layout, manifest format, the C API for writing a module, and the
-full list of import errors, see
-[`aux_engine/docs/external_modules.md`](../aux_engine/docs/external_modules.md).
-
-### History Box
-
-- `Enter` on selected row: inject command into console input line
-- Double-click: inject and execute
-- Object undo/redo from the menu or shortcuts leaves a comment line such as `// undo x` or `// redo x2`
-- History is saved/restored automatically
-
-History file:
-
-- `QStandardPaths::AppDataLocation/auxlab2.history`
-
-### Variable Box
-
-- `Enter`: open signal graph window (if variable is displayable)
-- `Space`: play audio (if variable is audio)
-- Double-click: open signal table window
-
-### Signal Graph Window
-
-- x-axis: time (audio) or index (non-audio)
-- y-axis: `[-1, 1]` (audio) or auto-fit (non-audio)
-- x/y ticks and labels
-- `Detach`: move the current graph tab into an independent window
-- `Dock`: move a detached graph window back into the main window
-- `+`: zoom in (center-based)
-- `-`: zoom out
-- `Left` / `Right`: pan view
-- Mouse drag: select range
-- `Shift` + click with an existing selection: extend the selection edge to the clicked point
-- Left `Shift` + `Left` / `Right`: move the selection start by about 1/100 of the visible range
-- Right `Shift` + `Left` / `Right`: move the selection end by about 1/100 of the visible range
-- `Enter`: zoom to selected range
-- Selected ranges are available from graphics handles:
-  - `r = fig.axes.selrange` returns `[]` or `[start end]` in the axes x-coordinate system.
-  - `fig.axes.selrange = [start end]` sets the selected range.
-  - `fig.axes.selrange = []` clears it.
-  - `fig2.axes.selrange = fig.axes.selrange` copies it when each `axes` reference resolves to one axes.
-  - Named figures also expose `fig.selrange` as the shared selection mirror for stereo/namesake plots.
-- For a named plot, `x.?sel` returns the data block inside the named figure's selected range.
-- Range navigation shortcuts:
-  - macOS: `Ctrl+Left`: set view start to `0`
-  - Windows/Linux: `Alt+Left`: set view start to `0`
-  - macOS: `Ctrl+Right`: set view end to the signal end
-  - Windows/Linux: `Alt+Right`: set view end to the signal end
-  - macOS: `Ctrl+/`: reset to the full signal range
-  - Windows/Linux: `Alt+/`: reset to the full signal range
-  - macOS: `Ctrl+,`: go back to the previous range
-  - Windows/Linux: `Alt+,`: go back to the previous range
-  - macOS: `Ctrl+.`: go forward again after stepping back
-  - Windows/Linux: `Alt+.`: go forward again after stepping back
-  - When zoomed in, `Home`, `,`, or `<`: move the visible range start to `0`
-  - When zoomed in, `End`, `.`, or `>`: move the visible range end to the signal end
-  - When zoomed in, `/` or `?`: reset to the full signal range
-- Stereo audio:
-  - default: vertical stacked channels
-  - `F2`: cycle vertical -> overlay (blue/red) -> overlay (red/blue)
-- Audio playback:
-  - `Space`: play selected range or current view range
-  - `Space` while playing: pause/resume
-  - `Esc`: stop
-  - moving playhead line during playback
-
-## Notes
-
-- Graph/table windows are tracked per workspace scope.
-- During UDF child-scope debugging, windows from other scope are deactivated.
-- Windows are closed when their variable is removed from active scope.
-
-### Nonblocking assignment with `<-`
-
-The outermost call determines when the result appears. For example, `r <- sum(filt(x,b))` shows `r.status` as `"requested"` until the sum is ready.
-
-A deferred expression uses workspace values captured at launch. If it fails, the destination holds `status = "error"` and a `message`. Reassigning or clearing the destination discards any later result from the old assignment. Invalid direct filter or block-processing arguments report an error at launch. Use a space in comparisons such as `x < -1` to keep the negative sign separate from `<`. In scripts written with the earlier progressive spelling, replace `<~` with `<-`. Ordinary `=` remains synchronous.
-
-#### Functions that support progressive mode
-
-Use `<-` with a plain top-level variable and one of the following functions as the outermost call. The workbench publishes completed blocks while the job runs.
-
-| Function | Example | What becomes available |
-| --- | --- | --- |
-| `filt()` | `y <- x.filt(b,a)` | Filtered samples from a real vector or contiguous mono or aligned stereo audio. Grouped stereo keeps its rows, and each channel carries its own filter state across blocks. |
-| `wave()` | `x <- wave("take.wav",1000,4000)` | Decoded WAV audio from 1 to 4 seconds at the workspace sample rate. Omit the times to read the whole file. HTTP(S) WAV decoding starts after the download. |
-| `file()` | `x <- file("take.mp3")` | Decoded mono or stereo audio from a local WAV or MP3, identified by its contents. Local text and HTTP(S) byte results are published once. |
-| `progblocks()` | `r <- progblocks(x,20,"analyze")` | The result of the user-defined `analyze` callback after each 20 ms window. A stereo window delivers both channels in one call. A callback can also publish growing mono or stereo audio in `r.h.completed`. |
-
-More functions will support progressive mode in future updates.
-
-For filtering and decoding, `y.h.completed` counts published frames when the destination is `y`. For block callbacks, `r.h.samples_completed` counts processed input frames. A stereo pair counts as one frame. [Callback guide](PROGBLOCKS.md)
-
-For a local WAV, a literal path or filename variable makes the first block available immediately. Both channels of a stereo file grow together at the workspace sample rate. This example loads and plays the section from 1 to 4 seconds.
+Plots created from the object lists update automatically when the object changes. Try changing `x` to low-pass noise with a cutoff frequency of 1000 Hz.
 
 ```aux
-x <- wave("recording.wav", 1000, 4000)
-p = play(x)
-x.h.completed
+x = noise(3s).lpf(1000) @-20
 ```
 
-Use `plot(x)` to follow the waveform, `snapshot = x` to copy the available samples, and `stop(x.h)` to cancel decoding. Local MP3 files loaded with `file()`, computed paths, and WAV downloads can initially show `status = "requested"`. Once `x.h` appears, consumers can attach. For an HTTP(S) WAV, `wave(url)` starts decoding after download. `file(url)` returns bytes, and local text loads publish their usual result once.
+You'll notice the waveform updates when you enter the new command. This is one of AUXLAB's many useful features compared to MATLAB.
 
-### Progressive filtering, plotting, and playback
+![AUXLAB2 waveform updated after changing the audio object](docs/images/auxlab2-shot2.png)
 
-Paste these lines into the auxlab2 console. Submit the second line as one command to attach both consumers immediately. The rate at which the graph grows depends on the signal length and filter cost.
+## Documentation
 
-```text
-x = tone(330,8000)@-30
-y <- x.filt(ones(512)/512); plot(y); h=y.play
-y.h.status
-h.underflow_count
-h.underflow_duration
-```
-
-Progressive `filt` accepts real vectors and contiguous mono or aligned stereo audio. Each channel starts with the supplied initial state and carries its own state between blocks. Grouped stereo input keeps its rows in both output channels. `progblocks` passes both channels to the callback together and counts stereo frames in `h.samples_completed`. The result retains its available samples. An ordinary assignment such as `s=y` takes a snapshot. Use `y.h.block` for the latest published block, `y.h.completed` for the sample count, and `stop(y.h)` to cancel. A linked plot redraws the latest prefix. Playback reads from the beginning, inserts silence during shortages, and resumes at the first unplayed sample.
-
-On the playback handle, `underflow_count` counts source starvation episodes and observed Qt device underruns, and `underflow_duration` is in milliseconds. For a progressive source, `underflow_blocks` counts read requests containing inserted silence out of `blocks_requested`. `source_underflow_count` counts distinct source shortages. Statistics remain accessible after playback ends.
-
-The block UDF example in `examples/progressive` accepts either complete or progressive input. Change to that directory using the console's `#cd` command (or add it to the UDF search path), then run
-
-```text
-x = tone(440,2000)
-y <- x.filt([0.5 0.5]); ev <- progblocks(y,10,"detect_loud_blocks",[0.5 0.5],-20)
-ev.h.status
-ev.times
-ev.levels
-```
-
-Use `x` in place of `y` to run the same detector on complete input. The callback filters each window with carried state and stores the sample-derived start time in milliseconds and AUX RMS in dB for each window strictly above the threshold. Windows start from the beginning even when the consumer attaches late. The last partial window is evaluated at its actual length. Callback failures are reported in `ev.h.error`.
-
-See [PROGBLOCKS.md](PROGBLOCKS.md) for the callback contract, progress fields, limitations, and AEC example.
+- Learn AUX syntax, audio objects, and scripting in the [AUX User Guide](https://github.com/bjkwon/aux_engine/blob/main/user-docs/AUX_User_Guide.md).
+- Look up built-in functions and their arguments in the [AUX Function Reference](https://github.com/bjkwon/aux_engine/blob/main/user-docs/AUX_Function_Reference.md).
+- Learn the console, variable browser, graph controls, and debugger in the [AUXLAB2 GUI and Debugging Tutorial](TUTORIAL_GUI_AND_DEBUGGING.md).
+- Process audio in blocks with callbacks using the [`progblocks` guide](PROGBLOCKS.md).
+- Load or develop native extensions using the [external modules guide](https://github.com/bjkwon/aux_engine/blob/main/docs/external_modules.md).
