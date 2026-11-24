@@ -36,10 +36,38 @@ Return the state and any accumulated output in `out`. It is normally a struct. `
 #cd /Users/bkwon/dev/auxlab2/examples/progressive
 x = tone(440,2000);
 ev <- progblocks(x, 10, "detect_loud_blocks", [0.5 0.5], -20)
+```
+
+Here `detect_loud_blocks` is the callback UDF: `progblocks` calls it for each block, so you do not call it yourself. Conceptually, at 8 kHz, the first calls look like this (`first_block` and `second_block` stand for the corresponding audio windows):
+
+```aux
+// First 10 ms block
+out = detect_loud_blocks(first_block, 0, [], 1, [0.5 0.5], -20)
+
+// Next block: the previous output becomes prior
+out = detect_loud_blocks(second_block, 10, out, 0, [0.5 0.5], -20)
+
+// And so on...
+```
+
+The UDF's actual signature is:
+
+```aux
+function out = detect_loud_blocks(chunk, timestamp, prior, first, b, threshold)
+```
+
+On the first call, `first` tells the UDF to initialize its output. On later calls, `prior` supplies the previous filter state and detected events. `b` and `threshold` come from the extra arguments in the `progblocks` call. Each returned `out` becomes the next call's `prior` and is published in `ev`.
+
+Inspect the accumulated result while it runs:
+
+```aux
 ev.h.status
+ev.h.samples_completed
 ev.times
 ev.levels
 ```
+
+`ev.times` contains the start times of blocks whose filtered RMS exceeds the threshold; `ev.levels` contains their RMS levels.
 
 ## Progress, errors, and output
 
