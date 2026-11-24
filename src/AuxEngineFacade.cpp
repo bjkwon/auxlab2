@@ -682,12 +682,12 @@ bool AuxEngineFacade::installGraphicsBackend(const auxGraphicsBackend& backend, 
   return true;
 }
 
-bool AuxEngineFacade::installPlaybackBackend(const auxPlaybackBackend& backend, std::string& err) {
+bool AuxEngineFacade::installPlaybackBackend(const auxPlaybackBackend& backend, auxStreamStartHook startStream, std::string& err) {
   if (!rootCtx_) {
     err = "AUX engine is not initialized.";
     return false;
   }
-  if (aux_install_playback_backend(rootCtx_, backend) != 0) {
+  if (aux_install_playback_backend(rootCtx_, backend, startStream) != 0) {
     err = "Failed to install playback backend.";
     return false;
   }

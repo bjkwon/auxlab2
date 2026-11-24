@@ -107,6 +107,22 @@ Playback / recording handles:
 | `h.resume` / `h.resume()` | `resume(h)` |
 | `h.delete` / `h.delete()` | `delete(h)` |
 
+To stream a local file or an HTTP(S) audio URL in auxlab2, pass its location directly.
+
+```aux
+p = streamplay("very-long-file.wav")
+pause(p)
+resume(p)
+stop(p)
+```
+
+The handle tracks playback while Qt reads and decodes the source. AUX does not
+retain the samples. Relative paths use the current working directory. Use a
+direct media URL for remote audio, including a presigned HTTPS URL for S3.
+Supported formats depend on the installed Qt media backend. On macOS, serve
+remote WAV files with HTTP byte-range support. Network and decoding errors
+appear in the console and clear the handle's active flag.
+
 Graphics handles:
 
 | Method form | Rewritten as |

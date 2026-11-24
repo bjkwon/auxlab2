@@ -1,5 +1,8 @@
 #include "MainWindow.h"
 #include "ProgressivePlaybackDevice.h"
+#include <QAudioOutput>
+#include <QMediaPlayer>
+#include <QUrl>
 
 #include "BinaryObjectWindow.h"
 #include "CellMembersWindow.h"
@@ -1071,11 +1074,14 @@ MainWindow::MainWindow() {
     auxPlaybackBackend playbackBackend;
     playbackBackend.userdata = this;
     playbackBackend.start = &auxlab2StartPlayback;
+    const auto startStream = [](void* owner, uint64_t id, const std::string& source, std::string& err) -> int {
+      return static_cast<MainWindow*>(owner)->startStreamPlayback(id, source, err);
+    };
     playbackBackend.control = &auxlab2ControlPlayback;
     playbackBackend.record = &auxlab2RecordAudio;
     playbackBackend.record_async_start = &auxlab2StartAsyncRecord;
     playbackBackend.record_async_control = &auxlab2ControlAsyncRecord;
-    if (!engine_.installPlaybackBackend(playbackBackend, err)) {
+    if (!engine_.installPlaybackBackend(playbackBackend, startStream, err)) {
       QMessageBox::warning(this, "AUX Playback", QString::fromStdString(err));
     }
   }
@@ -1121,6 +1127,8 @@ MainWindow::~MainWindow() {
   }
   engine_.clearGraphicsBackend();
   engine_.clearPlaybackBackend();
+  for (const auto& entry : streamPlayers_) delete entry.second;
+  streamPlayers_.clear();
   if (varAudioSink_) {
     varAudioSink_->stop();
   }
@@ -3288,7 +3296,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 
   // A graphics handle probe may evaluate its argument. Starting or stopping
   // audio, or launching a producer, must happen exactly once in the evaluator.
-  static const QRegularExpression audioCommand(R"(^(?:play|stop|pause|resume)\s*\()");
+  static const QRegularExpression audioCommand(R"(^(?:play|streamplay|stop|pause|resume)\s*\()");
   static const QRegularExpression progressiveAssignment(R"(^[A-Za-z_]\w*\s*<~)");
   if (audioCommand.match(normalized).hasMatch() || progressiveAssignment.match(trimmed).hasMatch()) {
     return false;
@@ -4286,6 +4294,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
 }
 
 void MainWindow::onAsyncPollTick() {
+  refreshStreamHandles();
   refreshPlaybackHandles();
   processRecordingSessions();
   const int changed = engine_.pollAsync();
@@ -5376,6 +5385,61 @@ void MainWindow::playAudioForPath(const QString& path) {
   varAudioSink_->start(varAudioBuffer_);
 }
 
+bool MainWindow::startStreamPlayback(std::uint64_t handleId, const std::string& source, std::string& err) {
+  const QString path = QString::fromStdString(source);
+  QUrl url;
+  if (path.contains(QStringLiteral("://"))) {
+    url = QUrl(path, QUrl::StrictMode);
+    if (!url.isValid() || (url.scheme() != "https" && url.scheme() != "http") || url.host().isEmpty()) {
+      err = "streamplay() requires a local file path or a valid HTTP(S) URL.";
+      return false;
+    }
+  } else {
+    const QFileInfo file(path);
+    if (!file.isFile() || !file.isReadable()) {
+      err = "Cannot open audio file: " + source;
+      return false;
+    }
+    url = QUrl::fromLocalFile(file.absoluteFilePath());
+  }
+
+  auto* player = new QMediaPlayer(this);
+  if (!player->isAvailable()) {
+    delete player;
+    err = "No streaming media backend is available.";
+    return false;
+  }
+  player->setAudioOutput(new QAudioOutput(player));
+  streamPlayers_.emplace(handleId, player);
+  player->setSource(url);
+  player->play();
+  return true;
+}
+
+void MainWindow::refreshStreamHandles() {
+  if (streamPlayers_.empty()) return;
+  for (auto it = streamPlayers_.begin(); it != streamPlayers_.end();) {
+    auto* player = it->second;
+    const bool ended = player->mediaStatus() == QMediaPlayer::EndOfMedia;
+    const bool failed = player->error() != QMediaPlayer::NoError || player->mediaStatus() == QMediaPlayer::InvalidMedia;
+    const double duration = player->duration();
+    const double left = ended ? 0.0 : std::max(0.0, duration - player->position());
+    const double percent = ended ? 100.0 : duration > 0 ? 100.0 * (duration-left) / duration : 0.0;
+    engine_.updateRuntimeHandleMembers(it->first, {{"dur", duration}, {"durLeft", left}, {"prog", percent},
+        {"active", ended || failed ? 0.0 : 1.0},
+        {"paused", player->playbackState() == QMediaPlayer::PausedState ? 1.0 : 0.0}});
+    if (ended || failed) {
+      if (failed) commandBox_->appendAsyncOutput("streamplay(): " + player->errorString());
+      it = streamPlayers_.erase(it);
+      player->deleteLater();
+      refreshVariables();
+    } else {
+      ++it;
+    }
+  }
+  emit runtimeHandleMembersChanged();
+}
+
 bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
                                      AuxObj obj,
                                      int repeatCount,
@@ -5553,6 +5617,26 @@ void MainWindow::openPlaybackSink(PlaybackSession& session) {
 bool MainWindow::controlPlaybackHandle(std::uint64_t handleId,
                                        auxPlaybackCommand command,
                                        std::string& err) {
+  const auto stream = streamPlayers_.find(handleId);
+  if (stream != streamPlayers_.end()) {
+    auto* player = stream->second;
+    switch (command) {
+      case auxPlaybackCommand::AUX_PLAYBACK_PAUSE:
+        player->pause();
+        break;
+      case auxPlaybackCommand::AUX_PLAYBACK_RESUME:
+        player->play();
+        break;
+      case auxPlaybackCommand::AUX_PLAYBACK_STOP:
+        player->stop();
+        streamPlayers_.erase(stream);
+        player->deleteLater();
+        engine_.updateRuntimeHandleMembers(handleId, {{"active", 0}, {"paused", 0}, {"prog", 100}, {"durLeft", 0}});
+        return true;
+    }
+    engine_.updateRuntimeHandleMembers(handleId, {{"paused", command == auxPlaybackCommand::AUX_PLAYBACK_PAUSE ? 1.0 : 0.0}});
+    return true;
+  }
   auto it = playbackSessions_.find(handleId);
   if (it == playbackSessions_.end()) {
     err = "Invalid or inactive playback handle.";

@@ -25,6 +25,7 @@
 class QListWidget;
 class QListWidgetItem;
 class QAudioSource;
+class QMediaPlayer;
 class QIODevice;
 class QProcess;
 class QTreeWidget;
@@ -63,6 +64,7 @@ public:
   std::uint64_t createGraphicsAxesAtPos(const std::array<double, 4>& pos, std::string& err);
   bool deleteGraphicsHandle(std::uint64_t handleId, std::string& err);
   bool repaintGraphicsHandle(std::uint64_t handleId, std::string& err);
+  bool startStreamPlayback(std::uint64_t handleId, const std::string& source, std::string& err);
   bool startPlaybackHandle(std::uint64_t handleId, AuxObj obj, int repeatCount, bool reuseExistingHandle, std::string& err);
   bool controlPlaybackHandle(std::uint64_t handleId, auxPlaybackCommand command, std::string& err);
   bool startAsyncRecordHandle(std::uint64_t handleId, const auxAsyncRecordSpec& spec, std::string& err);
@@ -316,6 +318,8 @@ private:
   void openPlaybackSink(PlaybackSession& session);
   void updatePlaybackStats(PlaybackSession& session);
   std::map<std::uint64_t, PlaybackSession> playbackSessions_;
+  std::map<std::uint64_t, QMediaPlayer*> streamPlayers_;
+  void refreshStreamHandles();
 
   struct RecordingSession {
     std::uint64_t handleId = 0;

@@ -79,7 +79,7 @@ public:
 
   bool init();
   bool installGraphicsBackend(const auxGraphicsBackend& backend, std::string& err);
-  bool installPlaybackBackend(const auxPlaybackBackend& backend, std::string& err);
+  bool installPlaybackBackend(const auxPlaybackBackend& backend, auxStreamStartHook startStream, std::string& err);
   void clearGraphicsBackend();
   void clearPlaybackBackend();
   EvalResult eval(const std::string& command);
