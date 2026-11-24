@@ -1,10 +1,13 @@
-## 2026-11-23 — auxlab2 1.0.0 with aux_engine 2.7.0
+## 1.0.0
 
-- **Progressive filtering.** Run `y <- x.filt(b,a); plot(y); h=y.play` to filter, watch the waveform grow, and listen from the beginning. The workspace updates the duration and RMS as samples arrive. If playback catches up to the filter, it inserts silence and resumes at the first unplayed sample. The playback handle reports the underflow count and duration.
-- **Block UDFs.** `progblocks` calls a named UDF once per audio window and carries its result into the next call. The threshold detector example records the timestamps and filtered RMS levels of loud windows. Callbacks run one window per evaluator poll, so the duration of a callback affects console responsiveness. [Callback guide](PROGBLOCKS.md)
+2026-11-23 · aux_engine 2.7.0
+
+- **Progressive filtering.** Mono and aligned stereo signals retain their grouping and per-channel filter state. Run `y <- x.filt(b,a); plot(y); h=y.play` to filter, watch the waveform grow, and listen from the beginning. The workspace updates the duration and RMS as samples arrive. If playback catches up to the filter, it inserts silence and resumes at the first unplayed sample. The playback handle reports the underflow count and duration.
+- **Block UDFs.** `progblocks` calls a named UDF once per audio window, passes both stereo channels together, and carries its result into the next call. The threshold detector example records the timestamps and filtered RMS levels of loud windows. Callbacks run one window per evaluator poll, so the duration of a callback affects console responsiveness. [Callback guide](PROGBLOCKS.md)
 - **Acoustic echo cancellation (AEC).** The offline example uses normalized least mean squares (NLMS) to reduce simulated loudspeaker echo in a microphone signal. The progressive example carries the adaptive filter state across 100 ms windows. Start with 10 seconds at 8 kHz. Once the callback publishes its first window to `r`, `plot(r.h.completed)` and `play(r.h.completed)` follow the growing clean audio. [AEC setup and commands](examples/aec/README.md)
+- **Progressive file loading.** Local WAV and MP3 reads publish decoded frames in blocks. Both stereo channels become available together. [Supported functions and examples](README.md#functions-that-support-progressive-mode)
 - **File and URL playback.** `p = streamplay(path_or_url)` lets Qt Multimedia read and decode a local file or direct HTTP(S) media URL without loading the recording into the AUX workspace. Use `pause(p)`, `resume(p)`, and `stop(p)` for transport. The tested macOS backend requires HTTP byte-range support for remote WAV playback.
-- **Console migration.** Replace `<~` with `<-`. Direct `filt` and `progblocks` calls publish progress. Other right-hand sides publish once at completion. Clearing or reassigning the destination prevents a late job from overwriting it. [Console examples](README.md#nonblocking-assignment-with--)
+- **Console migration.** Replace `<~` with `<-`. The outermost call determines whether the result grows in blocks or appears once at completion. Clearing or reassigning the destination prevents a late job from overwriting it. [Console examples](README.md#nonblocking-assignment-with--)
 
 2026-10-08 0.9.9.c 2ac361c317f4 From Figure window tab pop-up menu, spectrum, spectrogram; remembers the floating figure window position when docked and the next detach sends the fig window to the last known position
 ================================

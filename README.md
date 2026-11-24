@@ -318,15 +318,34 @@ History file:
 
 ### Nonblocking assignment with `<-`
 
-Use `<-` with a plain top-level variable. The outermost call determines when the result becomes available.
-
-| Command | What appears in the workspace |
-| --- | --- |
-| `y <- filt(x,b)` or `y <- x.filt(b)` | A growing signal with progress in `y.h`. |
-| `ev <- progblocks(x,10,"detect_loud_blocks",b,-20)` | The callback accumulator after each completed window. |
-| `r <- sum(filt(x,b))` | A pending value with `r.status` equal to `"requested"`, then the final sum. Other ordinary expressions and UDF calls also publish once. |
+The outermost call determines when the result appears. For example, `r <- sum(filt(x,b))` shows `r.status` as `"requested"` until the sum is ready.
 
 A deferred expression uses workspace values captured at launch. If it fails, the destination holds `status = "error"` and a `message`. Reassigning or clearing the destination discards any later result from the old assignment. Invalid direct filter or block-processing arguments report an error at launch. Use a space in comparisons such as `x < -1` to keep the negative sign separate from `<`. In scripts written with the earlier progressive spelling, replace `<~` with `<-`. Ordinary `=` remains synchronous.
+
+#### Functions that support progressive mode
+
+Use `<-` with a plain top-level variable and one of the following functions as the outermost call. The workbench publishes completed blocks while the job runs.
+
+| Function | Example | What becomes available |
+| --- | --- | --- |
+| `filt()` | `y <- x.filt(b,a)` | Filtered samples from a real vector or contiguous mono or aligned stereo audio. Grouped stereo keeps its rows, and each channel carries its own filter state across blocks. |
+| `wave()` | `x <- wave("take.wav",1000,4000)` | Decoded WAV audio from 1 to 4 seconds at the workspace sample rate. Omit the times to read the whole file. HTTP(S) WAV decoding starts after the download. |
+| `file()` | `x <- file("take.mp3")` | Decoded mono or stereo audio from a local WAV or MP3, identified by its contents. Local text and HTTP(S) byte results are published once. |
+| `progblocks()` | `r <- progblocks(x,20,"analyze")` | The result of the user-defined `analyze` callback after each 20 ms window. A stereo window delivers both channels in one call. A callback can also publish growing mono or stereo audio in `r.h.completed`. |
+
+More functions will support progressive mode in future updates.
+
+For filtering and decoding, `y.h.completed` counts published frames when the destination is `y`. For block callbacks, `r.h.samples_completed` counts processed input frames. A stereo pair counts as one frame. [Callback guide](PROGBLOCKS.md)
+
+For a local WAV, a literal path or filename variable makes the first block available immediately. Both channels of a stereo file grow together at the workspace sample rate. This example loads and plays the section from 1 to 4 seconds.
+
+```aux
+x <- wave("recording.wav", 1000, 4000)
+p = play(x)
+x.h.completed
+```
+
+Use `plot(x)` to follow the waveform, `snapshot = x` to copy the available samples, and `stop(x.h)` to cancel decoding. Local MP3 files loaded with `file()`, computed paths, and WAV downloads can initially show `status = "requested"`. Once `x.h` appears, consumers can attach. For an HTTP(S) WAV, `wave(url)` starts decoding after download. `file(url)` returns bytes, and local text loads publish their usual result once.
 
 ### Progressive filtering, plotting, and playback
 
@@ -340,7 +359,7 @@ h.underflow_count
 h.underflow_duration
 ```
 
-Progressive `filt` accepts contiguous real mono audio and real vectors. It carries filter state between blocks and uses row boundaries on grouped input. The result retains its available samples. An ordinary assignment such as `s=y` takes a snapshot. Use `y.h.block` for the latest published block, `y.h.completed` for the sample count, and `stop(y.h)` to cancel. A linked plot redraws the latest prefix. Playback reads from the beginning, inserts silence during shortages, and resumes at the first unplayed sample.
+Progressive `filt` accepts real vectors and contiguous mono or aligned stereo audio. Each channel starts with the supplied initial state and carries its own state between blocks. Grouped stereo input keeps its rows in both output channels. `progblocks` passes both channels to the callback together and counts stereo frames in `h.samples_completed`. The result retains its available samples. An ordinary assignment such as `s=y` takes a snapshot. Use `y.h.block` for the latest published block, `y.h.completed` for the sample count, and `stop(y.h)` to cancel. A linked plot redraws the latest prefix. Playback reads from the beginning, inserts silence during shortages, and resumes at the first unplayed sample.
 
 On the playback handle, `underflow_count` counts source starvation episodes and observed Qt device underruns, and `underflow_duration` is in milliseconds. For a progressive source, `underflow_blocks` counts read requests containing inserted silence out of `blocks_requested`. `source_underflow_count` counts distinct source shortages. Statistics remain accessible after playback ends.
 

@@ -11,7 +11,7 @@
 class ProgressivePlaybackDevice final : public QIODevice {
 public:
   ProgressivePlaybackDevice(std::shared_ptr<const auxProgressiveAudio> source, int repeat, QObject* parent)
-      : QIODevice(parent), source_(std::move(source)), repeats_(repeat),
+      : QIODevice(parent), source_(std::move(source)), right_(aux_progressive_right_samples(*source_)), repeats_(repeat),
         lead_(std::max<qint64>(0, std::llround(source_->startMs * source_->sampleRate / 1000.0))) {
     open(ReadOnly | Unbuffered);
   }
@@ -23,7 +23,7 @@ public:
     // A sequential sink may size its next transfer from bytesAvailable().
     // Advertise one bounded pull, including silence during starvation.
     const qint64 remaining = std::max<qint64>(0, totalFrames() - consumed.load());
-    return 2 * std::min<qint64>(remaining, pullFrames());
+    return bytesPerFrame() * std::min<qint64>(remaining, pullFrames());
   }
   bool atEnd() const override { return source_->finished() && bytesAvailable() == 0; }
 
@@ -34,36 +34,43 @@ protected:
   qint64 readData(char* data, qint64 bytes) override {
     const qint64 pass = passFrames();
     qint64 pos = consumed.load();
-    const qint64 count = std::min({bytes / 2, pass * repeats_ - pos, static_cast<qint64>(pullFrames())});
+    const qint64 count = std::min({bytes / bytesPerFrame(), pass * repeats_ - pos, static_cast<qint64>(pullFrames())});
     if (count <= 0 || !pass) return 0;
     ++requests;
     const qint64 ready = source_->ready();
     qint64 missing = 0;
     for (qint64 i = 0; i < count; ++i) {
       qint64 frame = pos % pass - lead_;
-      qint16 sample = 0;
+      qint16 samples[2]{};
       if (frame >= ready) {
         if (!starving_) ++episodes;
         starving_ = true;
         ++missing;
       } else {
         starving_ = false;
-        if (frame >= 0)
-          sample = static_cast<qint16>(std::lrint(32767 * std::clamp(source_->samples()[frame], -1.0, 1.0)));
+        if (frame >= 0) {
+          samples[0] = pcm16(source_->samples()[frame]);
+          if (right_) samples[1] = pcm16(right_[frame]);
+        }
         ++pos;
       }
-      std::memcpy(data + 2*i, &sample, sizeof(sample));
+      std::memcpy(data + bytesPerFrame()*i, samples, bytesPerFrame());
     }
     if (missing) {
       ++shortRequests;
       silence += missing;
     }
     consumed = pos;
-    return 2*count;
+    return bytesPerFrame()*count;
   }
 private:
+  static qint16 pcm16(double sample) {
+    return static_cast<qint16>(std::lrint(32767 * std::clamp(sample, -1.0, 1.0)));
+  }
+  int bytesPerFrame() const { return right_ ? 4 : 2; }
   int pullFrames() const { return std::max(1, source_->sampleRate / 10); }
   std::shared_ptr<const auxProgressiveAudio> source_;
+  const double* right_;
   int repeats_;
   qint64 lead_;
   bool starving_ = false;

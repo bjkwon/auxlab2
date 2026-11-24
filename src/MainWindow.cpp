@@ -4358,13 +4358,17 @@ void MainWindow::onAsyncPollTick() {
       data->sampleRate = link.source->sampleRate;
       data->isAudio = data->sampleRate > 1;
       data->startTimeSec = link.source->startMs / 1000.0;
-      data->channels.resize(1);
-      data->channels.front().samples.assign(link.source->samples(), link.source->samples()+ready);
-      data->channels.front().segments.push_back({0, static_cast<int>(ready)});
+      const double* right = aux_progressive_right_samples(*link.source);
+      data->channels.resize(right ? 2 : 1);
+      for (size_t ch = 0; ch < data->channels.size(); ++ch) {
+        const double* samples = ch == 0 ? link.source->samples() : right;
+        data->channels[ch].samples.assign(samples, samples + ready);
+        data->channels[ch].segments.push_back({0, static_cast<int>(ready)});
+      }
       link.window->updateData(data);
       link.displayed = ready;
     }
-    if (!link.window || ready == link.source->totalFrames || link.source->canceled())
+    if (!link.window || (link.source->finished() && link.displayed == link.source->ready()))
       it = progressivePlots_.erase(it);
     else ++it;
   }
@@ -5528,6 +5532,7 @@ bool MainWindow::startPlaybackHandle(std::uint64_t handleId,
   int onePassFrames = 0;
   QByteArray onePassPcm;
   if (stream) {
+    channelCount = aux_progressive_right_samples(*stream) ? 2 : 1;
     const double lead = std::max(0.0, std::round(stream->startMs * sampleRate / 1000.0));
     if ((lead + stream->totalFrames) * repeatCount > std::numeric_limits<int>::max()) {
       err = "Playback duration exceeds the supported frame count.";

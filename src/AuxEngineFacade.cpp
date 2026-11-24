@@ -460,7 +460,7 @@ std::string AuxEngineFacade::cachedRmsForObj(const AuxObj& obj) const {
 
   std::ostringstream display;
   AuxSignal prefix{};
-  if (aux_progressive_audio(obj) && aux_get_segment(obj, 0, 0, prefix) && prefix.nSamples == lengths.front()) {
+  if (channels == 1 && aux_progressive_audio(obj) && aux_get_segment(obj, 0, 0, prefix) && prefix.nSamples == lengths.front()) {
     const size_t previous = entry.lengths.empty() ? 0 : entry.lengths.front();
     const size_t begin = previous <= lengths.front() ? previous : 0;
     entry.sumSquares = sumSquares(prefix.buf + begin, lengths.front() - begin,
