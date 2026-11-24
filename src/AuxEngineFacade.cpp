@@ -518,7 +518,7 @@ bool commandMayMutateValues(const std::string& command) {
       }
       continue;
     }
-    if (ch == '<' && i + 1 < command.size() && (command[i + 1] == '-' || command[i + 1] == '~')) {
+    if (ch == '<' && i + 1 < command.size() && command[i + 1] == '-') {
       return true;
     }
     if (ch != '=') {
@@ -728,7 +728,7 @@ EvalResult AuxEngineFacade::eval(const std::string& command) {
     if (dest.isEmpty()) {
       // A filter with only named inputs can only replace its destination.
       static const QRegularExpression namedFilter(
-          R"(^\s*([A-Za-z_]\w*)\s*<~\s*[A-Za-z_]\w*\.filt\s*\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*){0,2}\s*\)\s*;?\s*$)");
+          R"(^\s*([A-Za-z_]\w*)\s*<-\s*[A-Za-z_]\w*\.filt\s*\(\s*[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*){0,2}\s*\)\s*;?\s*$)");
       dest = namedFilter.match(QString::fromStdString(command)).captured(1);
     }
     if (dest.isEmpty()) clearValueCaches();

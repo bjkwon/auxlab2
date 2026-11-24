@@ -38,6 +38,7 @@ class QToolButton;
 class QFileSystemWatcher;
 class AudioCaptureSink;
 class CommandConsole;
+class WindowBackendDispatcher;
 class SignalGraphWindow;
 class SignalTableWindow;
 class StructMembersWindow;
@@ -245,6 +246,8 @@ private:
   void showSettingsDialog();
   void showAboutDialog();
   void refreshPlaybackHandles();
+  // Backend callbacks can outlive a command. The dispatcher outlives the engine.
+  std::unique_ptr<WindowBackendDispatcher> backendDispatcher_;
   AuxEngineFacade engine_;
   GraphicsManager graphicsManager_;
 

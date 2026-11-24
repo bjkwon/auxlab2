@@ -77,6 +77,43 @@
 #include <unistd.h>
 #endif
 
+#include <QThread>
+#include <future>
+#include <mutex>
+
+class WindowBackendDispatcher {
+public:
+  explicit WindowBackendDispatcher(MainWindow* window) : window_(window) {}
+
+  template <typename Call>
+  auto invoke(Call call) -> decltype(call(static_cast<MainWindow*>(nullptr))) {
+    if (QThread::currentThread() == window_->thread()) return call(window_);
+
+    // AUX arguments belong to the worker until its backend call returns.
+    // Dropping a queued task at shutdown releases the worker's future.
+    using Result = decltype(call(window_));
+    auto task = std::make_shared<std::packaged_task<Result()>>([this, call] { return call(window_); });
+    auto result = task->get_future();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!receiver_) throw std::runtime_error("The AUX workbench is closing.");
+      QMetaObject::invokeMethod(receiver_.get(), [task] { (*task)(); }, Qt::QueuedConnection);
+    }
+    task.reset();
+    return result.get();
+  }
+
+  void close() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    receiver_.reset();
+  }
+
+private:
+  MainWindow* window_;
+  std::mutex mutex_;
+  std::unique_ptr<QObject> receiver_ = std::make_unique<QObject>();
+};
+
 namespace {
 constexpr int kMaxRecentUdfFiles = 8;
 constexpr int kHistoryCommandRole = Qt::UserRole + 1;
@@ -460,6 +497,8 @@ QStringList splitTopLevelArgs(const QString& text) {
   return out;
 }
 
+const QRegularExpression kAsyncAssignment(R"(^([A-Za-z_]\w*)\s*<-)");
+
 // Splits at top-level ',' / ';' separators. Separators inside (), [], {}, strings, or an
 // if/for/while/switch/try/function ... end block are not split points, so a one-line block
 // such as "for k=1:3, x++=k; end" stays one statement. A ';' stays attached to its statement
@@ -837,6 +876,21 @@ std::optional<SignalData> signalDataFromNumericDisplay(const QString& text) {
   return data;
 }
 
+// Adapt the engine's function-pointer hooks without changing their signatures.
+template <auto Hook>
+struct WindowBackendHook;
+template <typename R, typename... Args, R (*Hook)(void*, Args...)>
+struct WindowBackendHook<Hook> {
+  static R call(void* userdata, Args... args) {
+    return static_cast<WindowBackendDispatcher*>(userdata)->invoke(
+        [&](MainWindow* window) { return Hook(window, args...); });
+  }
+};
+
+int auxlab2StartStream(void* owner, uint64_t id, const std::string& source, std::string& err) {
+  return static_cast<MainWindow*>(owner)->startStreamPlayback(id, source, err);
+}
+
 int auxlab2GraphicsNotify(void* userdata, const auxGraphicsEvent& event, std::string& errstr) {
   auto* window = static_cast<MainWindow*>(userdata);
   if (!window) {
@@ -1046,42 +1100,39 @@ int auxlab2ControlAsyncRecord(void* userdata,
 }
 }  // namespace
 
-MainWindow::MainWindow() {
+MainWindow::MainWindow() : backendDispatcher_(std::make_unique<WindowBackendDispatcher>(this)) {
   if (!engine_.init()) {
     QMessageBox::critical(nullptr, "AUX", "Failed to initialize AUX engine.");
   } else {
     auxGraphicsBackend backend;
-    backend.userdata = this;
-    backend.notify = &auxlab2GraphicsNotify;
-    backend.current_figure = &auxlab2CurrentFigureId;
-    backend.current_axes = &auxlab2CurrentAxesId;
-    backend.create_figure = &auxlab2CreateFigure;
-    backend.figure_from_handle = &auxlab2FigureFromHandle;
-    backend.figure_at_pos = &auxlab2FigureAtPos;
-    backend.named_figure = &auxlab2NamedFigure;
-    backend.plot = &auxlab2Plot;
-    backend.line = &auxlab2Line;
-    backend.create_axes = &auxlab2CreateAxes;
-    backend.axes_from_handle = &auxlab2AxesFromHandle;
-    backend.axes_at_pos = &auxlab2AxesAtPos;
-    backend.delete_handle = &auxlab2DeleteHandle;
-    backend.repaint_handle = &auxlab2RepaintHandle;
+    backend.userdata = backendDispatcher_.get();
+    backend.notify = &WindowBackendHook<auxlab2GraphicsNotify>::call;
+    backend.current_figure = &WindowBackendHook<auxlab2CurrentFigureId>::call;
+    backend.current_axes = &WindowBackendHook<auxlab2CurrentAxesId>::call;
+    backend.create_figure = &WindowBackendHook<auxlab2CreateFigure>::call;
+    backend.figure_from_handle = &WindowBackendHook<auxlab2FigureFromHandle>::call;
+    backend.figure_at_pos = &WindowBackendHook<auxlab2FigureAtPos>::call;
+    backend.named_figure = &WindowBackendHook<auxlab2NamedFigure>::call;
+    backend.plot = &WindowBackendHook<auxlab2Plot>::call;
+    backend.line = &WindowBackendHook<auxlab2Line>::call;
+    backend.create_axes = &WindowBackendHook<auxlab2CreateAxes>::call;
+    backend.axes_from_handle = &WindowBackendHook<auxlab2AxesFromHandle>::call;
+    backend.axes_at_pos = &WindowBackendHook<auxlab2AxesAtPos>::call;
+    backend.delete_handle = &WindowBackendHook<auxlab2DeleteHandle>::call;
+    backend.repaint_handle = &WindowBackendHook<auxlab2RepaintHandle>::call;
     std::string err;
     if (!engine_.installGraphicsBackend(backend, err)) {
       QMessageBox::warning(this, "AUX Graphics", QString::fromStdString(err));
     }
 
     auxPlaybackBackend playbackBackend;
-    playbackBackend.userdata = this;
-    playbackBackend.start = &auxlab2StartPlayback;
-    const auto startStream = [](void* owner, uint64_t id, const std::string& source, std::string& err) -> int {
-      return static_cast<MainWindow*>(owner)->startStreamPlayback(id, source, err);
-    };
-    playbackBackend.control = &auxlab2ControlPlayback;
-    playbackBackend.record = &auxlab2RecordAudio;
-    playbackBackend.record_async_start = &auxlab2StartAsyncRecord;
-    playbackBackend.record_async_control = &auxlab2ControlAsyncRecord;
-    if (!engine_.installPlaybackBackend(playbackBackend, startStream, err)) {
+    playbackBackend.userdata = backendDispatcher_.get();
+    playbackBackend.start = &WindowBackendHook<auxlab2StartPlayback>::call;
+    playbackBackend.control = &WindowBackendHook<auxlab2ControlPlayback>::call;
+    playbackBackend.record = &WindowBackendHook<auxlab2RecordAudio>::call;
+    playbackBackend.record_async_start = &WindowBackendHook<auxlab2StartAsyncRecord>::call;
+    playbackBackend.record_async_control = &WindowBackendHook<auxlab2ControlAsyncRecord>::call;
+    if (!engine_.installPlaybackBackend(playbackBackend, &WindowBackendHook<auxlab2StartStream>::call, err)) {
       QMessageBox::warning(this, "AUX Playback", QString::fromStdString(err));
     }
   }
@@ -1105,6 +1156,7 @@ MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
+  backendDispatcher_->close();
   // Docked figures are deleted by the QWidget base destructor after our
   // window registry and tab layout are gone.
   for (const auto& entry : scopedWindows_) {
@@ -2754,7 +2806,7 @@ bool MainWindow::shouldCreateObjectUndoCheckpoint(const QString& cmd) const {
     if (trimmed.isEmpty() || isUndoCommand(trimmed) || isRedoCommand(trimmed)) {
       continue;
     }
-    if (kAssignmentPattern.match(trimmed).hasMatch() ||
+    if (kAsyncAssignment.match(trimmed).hasMatch() || kAssignmentPattern.match(trimmed).hasMatch() ||
         kDeleteOrClearPattern.match(trimmed).hasMatch()) {
       return true;
     }
@@ -2968,10 +3020,12 @@ void MainWindow::runCommandInternal(const QString& cmd, bool addToHistory, bool 
     addHistory(historyCommand);
   }
 
+  const QStringList topLevelParts = splitTopLevelStatements(actual);
   if (allowUndoCheckpoint && shouldCreateObjectUndoCheckpoint(actual)) {
-    // A direct play assignment only binds the returned handle. Avoid
-    // checkpointing unrelated (potentially multi-hour) audio for this command.
-    const QString dest = AuxEngineFacade::playAssignmentDestination(actual.toStdString());
+    // Single-destination commands can checkpoint just the value they replace.
+    QString dest = AuxEngineFacade::playAssignmentDestination(actual.toStdString());
+    if (dest.isEmpty() && topLevelParts.size() == 1)
+      dest = kAsyncAssignment.match(actual.trimmed()).captured(1);
     ObjectUndoCheckpoint checkpoint = captureObjectUndoCheckpoint(historyCommand, dest);
     if (!checkpoint.label.isEmpty()) {
       undoStack_.push_back(std::move(checkpoint));
@@ -2982,7 +3036,6 @@ void MainWindow::runCommandInternal(const QString& cmd, bool addToHistory, bool 
     }
   }
 
-  const QStringList topLevelParts = splitTopLevelStatements(actual);
   if (topLevelParts.size() > 1) {
     for (const QString& part : topLevelParts) {
       if (!part.trimmed().isEmpty()) {
@@ -3297,8 +3350,7 @@ bool MainWindow::tryHandleGraphicsCommand(const QString& cmd, QString& output) {
   // A graphics handle probe may evaluate its argument. Starting or stopping
   // audio, or launching a producer, must happen exactly once in the evaluator.
   static const QRegularExpression audioCommand(R"(^(?:play|streamplay|stop|pause|resume)\s*\()");
-  static const QRegularExpression progressiveAssignment(R"(^[A-Za-z_]\w*\s*<~)");
-  if (audioCommand.match(normalized).hasMatch() || progressiveAssignment.match(trimmed).hasMatch()) {
+  if (audioCommand.match(normalized).hasMatch() || kAsyncAssignment.match(trimmed).hasMatch()) {
     return false;
   }
 

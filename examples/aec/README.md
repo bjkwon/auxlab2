@@ -159,7 +159,7 @@ With progressive mode available in the engine, set the runtime sampling rate to
 
 ```aux
 s = aec_setup(10);
-r <~ progblocks(s.reference, 100, "aec_progress_block", s.microphone, s.adapt, s.taps, .5)
+r <- progblocks(s.reference, 100, "aec_progress_block", s.microphone, s.adapt, s.taps, .5)
 r.h.status
 r.h.samples_completed
 r.samples

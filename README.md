@@ -316,13 +316,25 @@ History file:
 - During UDF child-scope debugging, windows from other scope are deactivated.
 - Windows are closed when their variable is removed from active scope.
 
+### Nonblocking assignment with `<-`
+
+Use `<-` with a plain top-level variable. The outermost call determines when the result becomes available.
+
+| Command | What appears in the workspace |
+| --- | --- |
+| `y <- filt(x,b)` or `y <- x.filt(b)` | A growing signal with progress in `y.h`. |
+| `ev <- progblocks(x,10,"detect_loud_blocks",b,-20)` | The callback accumulator after each completed window. |
+| `r <- sum(filt(x,b))` | A pending value with `r.status` equal to `"requested"`, then the final sum. Other ordinary expressions and UDF calls also publish once. |
+
+A deferred expression uses workspace values captured at launch. If it fails, the destination holds `status = "error"` and a `message`. Reassigning or clearing the destination discards any later result from the old assignment. Invalid direct filter or block-processing arguments report an error at launch. Use a space in comparisons such as `x < -1` to keep the negative sign separate from `<`. In scripts written with the earlier progressive spelling, replace `<~` with `<-`. Ordinary `=` remains synchronous.
+
 ### Progressive filtering, plotting, and playback
 
 Paste these lines into the auxlab2 console. Submit the second line as one command to attach both consumers immediately. The rate at which the graph grows depends on the signal length and filter cost.
 
 ```text
 x = tone(330,8000)@-30
-y <~ x.filt(ones(512)/512); plot(y); h=y.play
+y <- x.filt(ones(512)/512); plot(y); h=y.play
 y.h.status
 h.underflow_count
 h.underflow_duration
@@ -336,7 +348,7 @@ The block UDF example in `examples/progressive` accepts either complete or progr
 
 ```text
 x = tone(440,2000)
-y <~ x.filt([0.5 0.5]); ev <~ progblocks(y,10,"detect_loud_blocks",[0.5 0.5],-20)
+y <- x.filt([0.5 0.5]); ev <- progblocks(y,10,"detect_loud_blocks",[0.5 0.5],-20)
 ev.h.status
 ev.times
 ev.levels

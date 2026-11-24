@@ -461,7 +461,7 @@ Expected:
 - `repeat_left` decrements after each completed segment
 - `stop` forces `repeat_left=0`, `prog=100`
 
-In auxlab2, run `x=tone(330,5000)@-60`, then `y <~ x.filt([0.5 0.5]); h=y.play`.
+In auxlab2, run `x=tone(330,5000)@-60`, then `y <- x.filt([0.5 0.5]); h=y.play`.
 Double-click `h` in Non-Audio Objects and select the `blocks_requested` row.
 Verify the row stays selected as its count and `prog` advance without further console commands.
 Check that `paused` follows `h.pause` and `h.resume`. At completion, verify that `active` is zero and the final request and underflow counters remain visible.

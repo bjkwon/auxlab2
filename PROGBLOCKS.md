@@ -5,10 +5,10 @@
 ## Calling it
 
 ```aux
-result <~ progblocks(source, window_ms, "callback_name", extra1, extra2)
+result <- progblocks(source, window_ms, "callback_name", extra1, extra2)
 ```
 
-- `result` must be a plain top-level variable. `progblocks` is recognized specifically on the right side of `<~`; it is not a general-purpose ordinary function call.
+- `result` must be a plain top-level variable. Write `progblocks(...)` as the outermost call on the right of `<-`. Each completed callback publishes another value to `result`.
 - `source` is nonempty, contiguous, real mono audio. It may be complete audio or a progressive audio result. Stereo, complex audio, and discontinuous audio are not supported.
 - `window_ms` is a positive finite duration in milliseconds. Window boundaries are computed from the sample rate, with at least one sample per window. Rounding permits successive windows to have different sample counts when the duration is not an integer number of samples.
 - `"callback_name"` is the name of an AUX UDF as a string, not a builtin function. The UDF must be discoverable through the usual UDF search path or current directory.
@@ -35,7 +35,7 @@ Return the state and any accumulated output in `out`. It is normally a struct. `
 ```aux
 #cd /Users/bkwon/dev/auxlab2/examples/progressive
 x = tone(440,2000);
-ev <~ progblocks(x, 10, "detect_loud_blocks", [0.5 0.5], -20)
+ev <- progblocks(x, 10, "detect_loud_blocks", [0.5 0.5], -20)
 ev.h.status
 ev.times
 ev.levels
@@ -64,7 +64,7 @@ From [examples/aec](examples/aec/README.md), at an 8 kHz runtime sample rate:
 ```aux
 #cd /Users/bkwon/dev/auxlab2/examples/aec
 s = aec_setup(10);
-r <~ progblocks(s.reference, 100, "aec_progress_block", s.microphone, s.adapt, s.taps, .5)
+r <- progblocks(s.reference, 100, "aec_progress_block", s.microphone, s.adapt, s.taps, .5)
 r.h.status
 r.h.samples_completed
 ```
